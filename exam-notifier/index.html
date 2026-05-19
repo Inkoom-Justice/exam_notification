@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Regent Exam Notifier · Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="src/style.css" />
+</head>
+<body>
+
+<!-- ════════════════════════ LOGIN SCREEN ════════════════════════ -->
+<div id="loginScreen" class="login-screen">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="logo-icon">🎓</div>
+      <h1>Regent Exam<br/><em>Notifier</em></h1>
+    </div>
+    <p class="login-sub">Admin access required</p>
+    <div class="input-group">
+      <label>PIN</label>
+      <input type="password" id="pinInput" maxlength="6" placeholder="Enter admin PIN" />
+    </div>
+    <button class="btn-primary" onclick="login()">Unlock Dashboard</button>
+    <p class="login-hint">Default PIN: <strong>1234</strong> — change in Settings</p>
+  </div>
+</div>
+
+<!-- ════════════════════════ MAIN APP ════════════════════════ -->
+<div id="app" class="app hidden">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-icon">🎓</span>
+      <span class="brand-text">Regent<br/><em>Exam Notifier</em></span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-tab="dashboard" onclick="switchTab('dashboard',this)">
+        <span class="nav-icon">📊</span> Dashboard
+      </a>
+      <a href="#" class="nav-item" data-tab="timetable" onclick="switchTab('timetable',this)">
+        <span class="nav-icon">📅</span> Timetable
+      </a>
+      <a href="#" class="nav-item" data-tab="invigilators" onclick="switchTab('invigilators',this)">
+        <span class="nav-icon">👥</span> Invigilators
+      </a>
+      <a href="#" class="nav-item" data-tab="log" onclick="switchTab('log',this)">
+        <span class="nav-icon">📋</span> Notification Log
+      </a>
+      <a href="#" class="nav-item" data-tab="settings" onclick="switchTab('settings',this)">
+        <span class="nav-icon">⚙️</span> Settings
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <button class="btn-ghost-sm" onclick="logout()">🔒 Lock</button>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main-content">
+
+    <!-- ── DASHBOARD ── -->
+    <section id="tab-dashboard" class="tab-section active">
+      <div class="page-header">
+        <div>
+          <h2>Dashboard</h2>
+          <p class="page-sub">Overview of today's exams and system status</p>
+        </div>
+        <button class="btn-primary" onclick="fetchTimetable()">
+          🔄 Sync from Google Sheets
+        </button>
+      </div>
+
+      <div id="syncStatus" class="sync-status hidden"></div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon">📅</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statToday">—</div>
+            <div class="stat-label">Exams Today</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">📬</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statSentToday">—</div>
+            <div class="stat-label">Notifications Sent Today</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">👥</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statInvigilators">—</div>
+            <div class="stat-label">Active Invigilators</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">🗓️</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statTotal">—</div>
+            <div class="stat-label">Total Exams in Period</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3 class="panel-title">📌 Today's Exams</h3>
+        <div id="todayExams" class="today-list">
+          <p class="empty-state">No exams loaded. Click "Sync from Google Sheets" to fetch the timetable.</p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3 class="panel-title">⏰ Upcoming (Next 48 Hours)</h3>
+        <div id="upcomingExams" class="today-list">
+          <p class="empty-state">No upcoming exams loaded.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── TIMETABLE ── -->
+    <section id="tab-timetable" class="tab-section hidden">
+      <div class="page-header">
+        <div>
+          <h2>Exam Timetable</h2>
+          <p class="page-sub">Full schedule from Google Sheets</p>
+        </div>
+        <div class="header-actions">
+          <input type="text" id="searchExams" placeholder="🔍 Search exams…" class="search-input" oninput="renderTimetable()" />
+          <button class="btn-primary" onclick="fetchTimetable()">🔄 Sync</button>
+        </div>
+      </div>
+      <div class="panel no-pad">
+        <div id="timetableContainer">
+          <p class="empty-state padded">No timetable loaded. Sync first.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── INVIGILATORS ── -->
+    <section id="tab-invigilators" class="tab-section hidden">
+      <div class="page-header">
+        <div>
+          <h2>Invigilators</h2>
+          <p class="page-sub">Manage team contact details</p>
+        </div>
+        <button class="btn-primary" onclick="openAddModal()">+ Add Invigilator</button>
+      </div>
+      <div class="panel no-pad">
+        <table class="data-table" id="invigilatorTable">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Alias(es) in Sheet</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="invigilatorBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── LOG ── -->
+    <section id="tab-log" class="tab-section hidden">
+      <div class="page-header">
+        <div>
+          <h2>Notification Log</h2>
+          <p class="page-sub">Audit trail of all sent notifications</p>
+        </div>
+        <button class="btn-ghost" onclick="clearLog()">🗑 Clear Log</button>
+      </div>
+      <div class="panel no-pad">
+        <div id="logContainer">
+          <p class="empty-state padded">No notifications have been sent yet.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── SETTINGS ── -->
+    <section id="tab-settings" class="tab-section hidden">
+      <div class="page-header">
+        <div>
+          <h2>Settings</h2>
+          <p class="page-sub">Configure notifications and system preferences</p>
+        </div>
+      </div>
+
+      <div class="settings-grid">
+
+        <div class="panel">
+          <h3 class="panel-title">📊 Google Sheets</h3>
+          <div class="input-group">
+            <label>Published CSV URL</label>
+            <input type="text" id="sheetsUrl" placeholder="https://docs.google.com/spreadsheets/d/…/export?format=csv&gid=…" />
+            <small>File → Share → Publish to web → CSV. Use the main timetable sheet (gid=1559134635).</small>
+          </div>
+          <div class="input-group">
+            <label>Sheet GID (tab ID)</label>
+            <input type="text" id="sheetsGid" placeholder="1559134635" />
+          </div>
+          <button class="btn-primary" onclick="saveSheetSettings()">Save Sheet Config</button>
+        </div>
+
+        <div class="panel">
+          <h3 class="panel-title">📧 EmailJS Config</h3>
+          <div class="info-box">
+            <strong>Setup steps:</strong><br/>
+            1. Create account at <a href="https://emailjs.com" target="_blank">emailjs.com</a><br/>
+            2. Add an Email Service (Gmail recommended)<br/>
+            3. Create an Email Template using the variables shown below<br/>
+            4. Paste your IDs here
+          </div>
+          <div class="input-group">
+            <label>Public Key</label>
+            <input type="text" id="ejsPublicKey" placeholder="your_public_key" />
+          </div>
+          <div class="input-group">
+            <label>Service ID</label>
+            <input type="text" id="ejsServiceId" placeholder="service_xxxxx" />
+          </div>
+          <div class="input-group">
+            <label>Template ID</label>
+            <input type="text" id="ejsTemplateId" placeholder="template_xxxxx" />
+          </div>
+          <div class="code-block">
+            <strong>Template variables to use:</strong><br/>
+            <code>{{to_name}}</code> — invigilator's first name<br/>
+            <code>{{to_email}}</code> — recipient email<br/>
+            <code>{{exam_subject}}</code> — e.g. "Mathematics"<br/>
+            <code>{{exam_component}}</code> — paper name<br/>
+            <code>{{exam_date}}</code> — formatted date<br/>
+            <code>{{exam_time}}</code> — start time<br/>
+            <code>{{exam_room}}</code> — room number<br/>
+            <code>{{role}}</code> — "Main Invigilator" or "Backup"<br/>
+            <code>{{readiness_time}}</code> — 20 min before start
+          </div>
+          <button class="btn-primary" onclick="saveEmailSettings()">Save Email Config</button>
+          <button class="btn-ghost" onclick="sendTestEmail()">📧 Send Test Email</button>
+        </div>
+
+        <div class="panel">
+          <h3 class="panel-title">⏰ Notification Rules</h3>
+          <div class="input-group">
+            <label>Notify invigilators how many minutes before exam?</label>
+            <input type="number" id="notifyMinutes" value="60" min="15" max="240" />
+          </div>
+          <div class="input-group">
+            <label>Email domain for auto-generating addresses</label>
+            <input type="text" id="emailDomain" value="regent.edu.pl" placeholder="regent.edu.pl" />
+          </div>
+          <div class="input-group">
+            <label>Timezone</label>
+            <select id="timezone">
+              <option value="Europe/Warsaw">Europe/Warsaw (CET/CEST)</option>
+              <option value="UTC">UTC</option>
+              <option value="Europe/London">Europe/London</option>
+            </select>
+          </div>
+          <button class="btn-primary" onclick="saveNotificationSettings()">Save Rules</button>
+        </div>
+
+        <div class="panel">
+          <h3 class="panel-title">🔒 Security</h3>
+          <div class="input-group">
+            <label>Current PIN</label>
+            <input type="password" id="currentPin" placeholder="Current PIN" />
+          </div>
+          <div class="input-group">
+            <label>New PIN</label>
+            <input type="password" id="newPin" placeholder="New PIN (4–6 digits)" />
+          </div>
+          <div class="input-group">
+            <label>Confirm New PIN</label>
+            <input type="password" id="confirmPin" placeholder="Confirm new PIN" />
+          </div>
+          <button class="btn-primary" onclick="changePin()">Change PIN</button>
+        </div>
+
+        <div class="panel">
+          <h3 class="panel-title">🧪 Manual Test</h3>
+          <p>Manually trigger the notification check (same logic GitHub Actions runs).</p>
+          <button class="btn-primary" onclick="runNotificationCheck()">▶ Run Notification Check Now</button>
+          <div id="testResult" class="test-result hidden"></div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ════════════════ ADD/EDIT INVIGILATOR MODAL ════════════════ -->
+<div id="invigModal" class="modal-backdrop hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modalTitle">Add Invigilator</h3>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="input-group">
+        <label>Full Name</label>
+        <input type="text" id="mName" placeholder="e.g. Anna Martowicz" />
+      </div>
+      <div class="input-group">
+        <label>Email <span class="auto-badge">auto-generated if blank</span></label>
+        <input type="email" id="mEmail" placeholder="firstname.surname@regent.edu.pl" />
+      </div>
+      <div class="input-group">
+        <label>Aliases in Timetable Sheet (comma-separated)</label>
+        <input type="text" id="mAliases" placeholder="e.g. AM, Anna M, Anna Martowicz" />
+        <small>These are the short names used in the invigilator columns of the sheet.</small>
+      </div>
+      <div class="input-group">
+        <label>Active</label>
+        <select id="mActive">
+          <option value="true">Yes</option>
+          <option value="false">No</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveInvigilator()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast hidden"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>
