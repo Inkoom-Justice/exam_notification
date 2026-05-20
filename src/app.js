@@ -60,7 +60,7 @@ function login() {
     return;
   }
 
-  if (pin === String(settings.pin)) {
+  if (pin === settings.pin) {
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     clearLoginError();
