@@ -471,7 +471,8 @@ body {
   font-size: 13px;
   line-height: 1.6;
 }
-.test-result.ok { background: var(--green-soft); color: var(--green); border: 1px solid #A7F3D0; }
+.test-result.ok   { background: var(--green-soft); color: var(--green); border: 1px solid #A7F3D0; }
+.test-result.info { background: var(--blue-soft); color: var(--blue); border: 1px solid #BFDBFE; }
 .test-result.err { background: #FEE2E2; color: #991B1B; border: 1px solid #FECACA; }
 
 /* ════════════ MODAL ════════════ */

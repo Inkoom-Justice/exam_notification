@@ -121,6 +121,41 @@ function resolveInvigilator(rawName) {
 }
 
 // ─── GOOGLE SHEETS FETCH ────────────────────────────────────────
+// Multiple CORS proxies tried in order — if one fails, the next is used.
+const CORS_PROXIES = [
+  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+  url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+  url => `https://thingproxy.freeboard.io/fetch/${encodeURIComponent(url)}`,
+];
+
+async function fetchWithProxyFallback(url) {
+  let lastErr = null;
+  for (const proxyFn of CORS_PROXIES) {
+    const proxyUrl = proxyFn(url);
+    try {
+      const res = await Promise.race([
+        fetch(proxyUrl),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout')), 8000))
+      ]);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      // allorigins wraps in JSON; others return raw text
+      try {
+        const json = JSON.parse(text);
+        if (json.contents) return json.contents;
+      } catch {}
+      // If it looks like CSV (has commas and newlines), use it directly
+      if (text.includes(',') && text.includes('\n')) return text;
+      throw new Error('Response does not look like CSV');
+    } catch (err) {
+      lastErr = err;
+      console.warn(`Proxy failed (${proxyUrl.slice(0, 40)}…): ${err.message}`);
+    }
+  }
+  throw new Error(`All proxies failed. Last error: ${lastErr?.message}`);
+}
+
 async function fetchTimetable() {
   const settings = getSettings();
   const url = settings.sheetsUrl;
@@ -133,15 +168,14 @@ async function fetchTimetable() {
   }
 
   try {
-    // Use allorigins proxy to bypass CORS when hosted on GitHub Pages
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-    const response = await fetch(proxyUrl);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const json = await response.json();
-    const csv = json.contents;
+    const csv = await fetchWithProxyFallback(url);
     parseTimetableCSV(csv);
   } catch (err) {
-    showSyncStatus(`❌ Failed to fetch: ${err.message}. Ensure the sheet is published (File → Share → Publish to web → CSV).`, 'err');
+    showSyncStatus(
+      `❌ Could not fetch the sheet: ${err.message}. ` +
+      `Make sure the sheet is published (File → Share → Publish to web → CSV) and the URL is correct.`,
+      'err'
+    );
   }
 }
 
@@ -648,6 +682,48 @@ function loadSettingsUI() {
   setVal('notifyMinutes', s.notifyMinutes || 60);
   setVal('emailDomain', s.emailDomain || 'regent.edu.pl');
   setVal('timezone', s.timezone || 'Europe/Warsaw');
+}
+
+async function testSheetConnection() {
+  const url = getVal('sheetsUrl');
+  if (!url) { showToast('Paste your CSV URL first', 'error'); return; }
+
+  const el = document.getElementById('connectionTestResult');
+  el.className = 'test-result info';
+  el.textContent = '⏳ Testing connection — trying proxies…';
+  el.classList.remove('hidden');
+
+  const proxyNames = ['corsproxy.io', 'codetabs.com', 'allorigins.win', 'thingproxy'];
+  let tried = 0;
+
+  for (const proxyFn of CORS_PROXIES) {
+    const proxyUrl = proxyFn(url);
+    const name = proxyNames[tried++];
+    el.textContent = `⏳ Trying proxy ${tried}/4: ${name}…`;
+    try {
+      const res = await Promise.race([
+        fetch(proxyUrl),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('Timeout after 8s')), 8000))
+      ]);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      let csv = text;
+      try { const j = JSON.parse(text); if (j.contents) csv = j.contents; } catch {}
+      const rowCount = csv.split('
+').filter(r => r.trim()).length;
+      el.className = 'test-result ok';
+      el.innerHTML = `✅ <strong>Connection successful via ${name}!</strong><br/>
+        Received ${rowCount} rows of data. Your URL is working correctly.<br/>
+        Now click "Sync Now" to load the timetable.`;
+      return;
+    } catch (err) {
+      el.textContent = `⏳ ${name} failed (${err.message}), trying next…`;
+    }
+  }
+  el.className = 'test-result err';
+  el.innerHTML = `❌ <strong>All 4 proxies failed.</strong><br/>
+    This usually means the sheet URL is not publicly accessible.<br/>
+    Please check: (1) the sheet is published as CSV, (2) the URL is copied correctly, (3) your internet connection is working.`;
 }
 
 function saveSheetSettings() {

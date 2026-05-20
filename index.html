@@ -203,7 +203,15 @@
             <label>Sheet GID (tab ID)</label>
             <input type="text" id="sheetsGid" placeholder="1559134635" />
           </div>
-          <button class="btn-primary" onclick="saveSheetSettings()">Save Sheet Config</button>
+          <div class="info-box" style="margin-bottom:12px">
+            🔄 The system tries <strong>4 different CORS proxies</strong> automatically and uses whichever responds first. Click "Test Connection" to verify your URL works.
+          </div>
+          <div id="connectionTestResult" class="test-result hidden"></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn-primary" onclick="saveSheetSettings()">💾 Save Config</button>
+            <button class="btn-ghost" onclick="testSheetConnection()">🔌 Test Connection</button>
+            <button class="btn-ghost" onclick="fetchTimetable()">🔄 Sync Now</button>
+          </div>
         </div>
 
         <div class="panel">
