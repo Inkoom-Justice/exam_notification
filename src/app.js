@@ -30,7 +30,7 @@ const DEFAULT_INVIGILATORS = [
   { id:'inv_9',  name:'Kristy Khemraj',      email:'', aliases:['Kristy','Kristy Khemraj','Kristy//','Khemraj'],       active:true },
   { id:'inv_10', name:'Justice Inkoom',      email:'', aliases:['Justice','Justice//','Justice Inkoom'],                active:true },
   { id:'inv_11', name:'Zipporah Bvalani',    email:'', aliases:['Zipporah','Zipporah//','Zipporah Bvalani'],            active:true },
-  { id:'inv_12', name:'Szymon Paczkowski',   email:'', aliases:['Szymon','Szymon//'],                                   active:true },
+  { id:'inv_12', name:'Szymon',              email:'', aliases:['Szymon','Szymon//'],                                   active:true },
 ];
 
 /* ─── STATE ────────────────────────────────────────────────────── */
@@ -55,7 +55,6 @@ function saveSettings(patch) {
 /** Current date string in Warsaw: "YYYY-MM-DD" */
 function warsawTodayISO() {
   return new Date().toLocaleDateString('sv-SE', { timeZone:'Europe/Warsaw' });
-  // sv-SE locale returns ISO format YYYY-MM-DD — clean and reliable
 }
 
 /** Current time in Warsaw as total minutes since midnight */
@@ -69,7 +68,6 @@ function warsawNowMinutes() {
 function parseTimeToMins(raw) {
   if (!raw) return null;
   const s = raw.toString().trim();
-  // Handle Excel time fractions like "0.375" (= 09:00)
   if (/^\d+\.\d+$/.test(s)) {
     const frac = parseFloat(s);
     return Math.round(frac * 24 * 60);
@@ -96,13 +94,6 @@ function addMins(timeStr, delta) {
 
 /* ═══════════════════════════════════════════════════════════════
    STATUS ENGINE  (Warsaw-aware)
-   Statuses:
-     notif-future  "In Xh Ym"   — upcoming, not yet in notify window
-     notif-window  "⏰ Notify soon" — within 60-min window but not started
-     notif-sent    "✓ Notified" / "✓ Main sent"
-     ongoing       "🟢 Ongoing (ends HH:MM)"
-     extended      "🔵 Extended (until HH:MM)"
-     past          "⚫ Past"
    ═══════════════════════════════════════════════════════════════ */
 function examStatus(exam) {
   const todayStr  = warsawTodayISO();
@@ -110,58 +101,37 @@ function examStatus(exam) {
   const { notifyMinutes } = getSettings();
 
   const startMins  = parseTimeToMins(exam.startTime);
-  const finishMins = parseTimeToMins(exam.finishTime);   // normal end
-  const extMins    = parseTimeToMins(exam.extFinishTime); // extended end (may be null)
+  const finishMins = parseTimeToMins(exam.finishTime);
+  const extMins    = parseTimeToMins(exam.extFinishTime);
 
   const isToday = exam.date === todayStr;
   const isPast  = exam.date < todayStr;
   const isFuture= exam.date > todayStr;
 
-  // ── Already past date ──
   if (isPast) return { cls:'status-past', label:'⚫ Past' };
+  if (isFuture) return { cls:'status-future', label:`${fmtDate(exam.date)}` };
 
-  // ── Future date ──
-  if (isFuture) {
-    return { cls:'status-future', label:`${fmtDate(exam.date)}` };
-  }
-
-  // ── Today ──
-
-  // Extended phase: start has passed, extFinish exists and hasn't passed
   if (extMins != null && nowMins >= startMins && nowMins < extMins) {
     return { cls:'status-extended', label:`🔵 Extended · ends ${minsToTime(extMins)}` };
   }
-
-  // Ongoing: started, not yet finished
   if (finishMins != null && nowMins >= startMins && nowMins < finishMins) {
     return { cls:'status-ongoing', label:`🟢 Ongoing · ends ${minsToTime(finishMins)}` };
   }
-
-  // Past today: finish time (or ext finish) has passed
   const endMins = extMins || finishMins;
-  if (endMins != null && nowMins >= endMins) {
-    return { cls:'status-past', label:'⚫ Past' };
-  }
-  // No finish time available — fall back: past if started > 30 min ago
-  if (finishMins == null && nowMins > startMins + 30) {
-    return { cls:'status-past', label:'⚫ Past' };
-  }
+  if (endMins != null && nowMins >= endMins) return { cls:'status-past', label:'⚫ Past' };
+  if (finishMins == null && nowMins > startMins + 30) return { cls:'status-past', label:'⚫ Past' };
 
-  // Notification sent
   if (exam.notifiedMain && exam.notifiedBackup) return { cls:'status-notified', label:'✓ Notified' };
   if (exam.notifiedMain)                         return { cls:'status-notified', label:'✓ Main sent' };
 
-  // Within notification window (≤ notifyMinutes before start)
   const minsUntil = startMins - nowMins;
   if (minsUntil >= 0 && minsUntil <= notifyMinutes) {
     return { cls:'status-window', label:`⏰ Notify in ${minsUntil}m` };
   }
 
-  // Future today
   const h = Math.floor(minsUntil / 60);
   const m = minsUntil % 60;
-  const label = h > 0 ? `In ${h}h ${m}m` : `In ${m}m`;
-  return { cls:'status-future', label };
+  return { cls:'status-future', label: h > 0 ? `In ${h}h ${m}m` : `In ${m}m` };
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -209,7 +179,6 @@ function initApp() {
   renderTimetable();
   renderLog();
   updateStats();
-  // Refresh statuses every 60 seconds (for ongoing/extended live updates)
   setInterval(() => { renderDashboard(); renderTimetable(); updateStats(); }, 60000);
 }
 
@@ -228,9 +197,7 @@ function generateEmail(name) {
   const domain = getSettings().emailDomain || 'regent.edu.pl';
   const clean  = name.replace(/\s*\(.*?\)\s*/g,'').trim();
   const parts  = clean.toLowerCase().replace(/[^a-z\s]/g,'').trim().split(/\s+/);
-  return parts.length >= 2
-    ? `${parts[0]}.${parts[parts.length-1]}@${domain}`
-    : `${parts[0]}@${domain}`;
+  return parts.length >= 2 ? `${parts[0]}.${parts[parts.length-1]}@${domain}` : `${parts[0]}@${domain}`;
 }
 
 function resolveEmail(inv) {
@@ -242,17 +209,14 @@ function resolveInvigilator(rawName) {
   if (!rawName) return null;
   const cleaned = rawName.toString().replace(/\/+$/, '').trim();
   if (!cleaned || cleaned === '-' || cleaned.toLowerCase() === 'nan') return null;
-  // Exact alias match
   const found = invigilators.find(inv =>
     inv.active && inv.aliases.some(a => a.trim().toLowerCase() === cleaned.toLowerCase())
   );
   if (found) return found;
-  // Partial first-name match
   const partial = invigilators.find(inv =>
     inv.active && inv.name.split(' ')[0].toLowerCase() === cleaned.split(' ')[0].toLowerCase()
   );
   if (partial) return partial;
-  // Raw fallback
   return { id:null, name:cleaned, email:'', aliases:[], active:true };
 }
 
@@ -281,9 +245,7 @@ async function proxyFetch(csvUrl, onProgress) {
       try { const j = JSON.parse(text); if (j && j.contents) return { csv:j.contents, proxy:PROXY_NAMES[i] }; } catch {}
       if (text.includes(',') && text.split('\n').length > 2) return { csv:text, proxy:PROXY_NAMES[i] };
       throw new Error('Response is not CSV');
-    } catch(e) {
-      lastErr = e.name === 'AbortError' ? 'Timed out' : e.message;
-    }
+    } catch(e) { lastErr = e.name === 'AbortError' ? 'Timed out' : e.message; }
   }
   throw new Error(`All proxies failed. Last: ${lastErr}`);
 }
@@ -316,7 +278,6 @@ async function testSheetConnection() {
   }
 }
 
-/* ─── CSV parser ───────────────────────────────────────────────── */
 function csvToRows(csv) {
   const rows = [];
   for (const line of csv.split('\n')) {
@@ -334,7 +295,6 @@ function csvToRows(csv) {
 
 function parseTimetableCSV(csv) {
   const rows = csvToRows(csv);
-  // Find header row containing "start time" AND "invigilator"
   let hi = -1;
   for (let i=0; i<rows.length; i++) {
     const r = rows[i].map(c=>(c||'').toLowerCase());
@@ -346,23 +306,23 @@ function parseTimetableCSV(csv) {
   const col = kw => H.findIndex(h => h.includes(kw.toLowerCase()));
 
   const C = {
-    date:         col('exam date'),        // col 8 in original
-    room:         col('room'),             // col 9
-    session:      col('session'),          // col 10
-    start:        col('start time'),       // col 11
-    entries:      col('entries'),
-    readiness:    col('full-readiness'),   // col 12
-    duration:     col('duration in min'),  // col 14
-    finish:       col('finish time'),      // col 15
-    extMins:      col('ext. time in min'), // col 16
-    extFinish:    col('ext. finish time'), // col 17
-    extFor:       col('extended time for'),// col 18
-    invig:        col('exam invigilator'), // col 20
-    backup:       col('backup invigilator'),// col 21
-    comments:     col('comments'),         // col 22
-    syllabus:     col('syllabus'),         // col 3
-    component:    col('component title'),  // col 4
-    code:         col('code'),             // col 7
+    date:         col('exam date'),
+    room:         col('room'),
+    session:      col('session'),
+    start:        col('start time'),
+    readiness:    col('full-readiness'),
+    duration:     col('duration in min'),
+    finish:       col('finish time'),
+    extMins:      col('ext. time in min'),
+    extFinish:    col('ext. finish time'),
+    extFor:       col('extended time for'),
+    entries:      col('entries'),          // 🌟 Added configuration map marker
+    invig:        col('exam invigilator'),
+    backup:       col('backup invigilator'),
+    comments:     col('comments'),
+    syllabus:     col('syllabus'),
+    component:    col('component title'),
+    code:         col('code'),
   };
 
   const existing = new Map(exams.map(e=>[e.id,e]));
@@ -377,30 +337,20 @@ function parseTimetableCSV(csv) {
     const syllabus  = (r[C.syllabus] ||'').toString().trim();
     if (!rawDate || !rawStart || !syllabus || rawDate==='NaN') continue;
 
-    // ── DATE PARSING ────────────────────────────────────────────────
-    // Google Sheets CSV exports dates as "2026-05-21 00:00:00" (space, no timezone).
-    // NEVER pass this to new Date() — JS treats the space format as UTC in most
-    // environments, shifting midnight UTC back one day in Warsaw (UTC+2).
-    // Strategy: extract YYYY-MM-DD directly from the string without any Date parsing.
     let dateStr = '';
-
     const raw = rawDate.toString().trim();
 
-    // Format 1: "2026-05-21 00:00:00" or "2026-05-21T00:00:00" — take first 10 chars
     if (/^\d{4}-\d{2}-\d{2}[T \d]/.test(raw)) {
-      dateStr = raw.substring(0, 10); // "2026-05-21" — exact, no timezone shift
+      dateStr = raw.substring(0, 10);
     }
-    // Format 2: "DD/MM/YYYY" → rearrange to "YYYY-MM-DD"
     else if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
       const [d, m, y] = raw.split('/');
       dateStr = `${y}-${m}-${d}`;
     }
-    // Format 3: "DD/MM/YY" → "20YY-MM-DD"
     else if (/^\d{2}\/\d{2}\/\d{2}$/.test(raw)) {
       const [d, m, y] = raw.split('/');
       dateStr = `20${y}-${m}-${d}`;
     }
-    // Format 4: "21 May 26" or "21 May 2026" — parse month name, no timezone risk
     else if (/^\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}$/.test(raw)) {
       const months = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
                       jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
@@ -410,25 +360,20 @@ function parseTimetableCSV(csv) {
       const yr     = parts[2].length === 2 ? '20' + parts[2] : parts[2];
       dateStr      = `${yr}-${mon}-${day}`;
     }
-    // Format 5: pure Excel serial number e.g. "45802" → convert arithmetically
     else if (/^\d{5}$/.test(raw)) {
-      // Excel epoch: 1 Jan 1900 = serial 1 (with leap-year bug: serial 60 = phantom Feb 29)
-      const serial = parseInt(raw) - (parseInt(raw) > 59 ? 1 : 0); // skip phantom day
-      const excelEpoch = new Date(Date.UTC(1899, 11, 31)); // Dec 31 1899 UTC
+      const serial = parseInt(raw) - (parseInt(raw) > 59 ? 1 : 0);
+      const excelEpoch = new Date(Date.UTC(1899, 11, 31));
       const ms = excelEpoch.getTime() + serial * 86400000;
       const d  = new Date(ms);
-      // Use UTC parts — epoch is UTC so this is safe
       dateStr = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
     }
 
     if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue;
 
-    // Parse start time
     const startMins = parseTimeToMins(rawStart);
     if (startMins == null) continue;
     const startTime = minsToTime(startMins);
 
-    // Finish & extension times
     const finishRaw    = C.finish    >= 0 ? (r[C.finish]    ||'').toString().trim() : '';
     const extFinishRaw = C.extFinish >= 0 ? (r[C.extFinish] ||'').toString().trim() : '';
     const extMinsRaw   = C.extMins   >= 0 ? (r[C.extMins]   ||'').toString().trim() : '';
@@ -436,7 +381,6 @@ function parseTimetableCSV(csv) {
     const finishMins   = parseTimeToMins(finishRaw);
     let   extFinishMins= parseTimeToMins(extFinishRaw);
 
-    // If ext finish couldn't parse but we have ext minutes, calculate it
     if (extFinishMins == null && finishMins != null && extMinsRaw && extMinsRaw !== '-') {
       const em = parseFloat(extMinsRaw);
       if (!isNaN(em) && em > 0) extFinishMins = finishMins + Math.round(em);
@@ -453,11 +397,11 @@ function parseTimetableCSV(csv) {
       id, date:dateStr, startTime, finishTime, extFinishTime,
       room:      C.room>=0      ? (r[C.room]     ||'').toString().trim() : '',
       session:   C.session>=0   ? (r[C.session]  ||'').toString().trim() : '',
-      entries:   C.entries>=0   ? (r[C.entries]  ||'').toString().trim() : '',
       syllabus,
       component: C.component>=0 ? (r[C.component]||'').toString().trim() : '',
       code,
       extFor:    C.extFor>=0    ? (r[C.extFor]   ||'').toString().trim() : '',
+      entries:   C.entries>=0   ? (r[C.entries]  ||'').toString().trim() : '', // 🌟 Added extraction property logic
       invigRaw:  C.invig>=0     ? (r[C.invig]    ||'').toString().trim() : '',
       backupRaw: C.backup>=0    ? (r[C.backup]   ||'').toString().trim() : '',
       comments:  C.comments>=0  ? (r[C.comments] ||'').toString().trim() : '',
@@ -540,7 +484,8 @@ function renderTimetable() {
   <table class="data-table">
     <thead><tr>
       <th>Date</th><th>Start</th><th>Finish</th><th>Ext. End</th>
-      <th>Session</th><th>Subject</th><th>Component</th><th>Entries</th><th>Room</th>
+      <th>Session</th><th>Subject</th><th>Component</th>
+      <th>Entries</th> <th>Room</th>
       <th>Main Invigilator</th><th>Backup</th><th>Status</th><th></th>
     </tr></thead>
     <tbody>${list.map(e => {
@@ -555,8 +500,7 @@ function renderTimetable() {
         <td>${esc(e.session||'—')}</td>
         <td>${esc(e.syllabus)}</td>
         <td style="color:var(--text-2);font-size:12px">${esc(e.component)}</td>
-        <td><strong>${esc(e.entries || '—')}</strong></td>
-        <td><span class="tag tag-room">${esc(e.room||'—')}</span></td>
+        <td><strong>${esc(e.entries || '—')}</strong></td> <td><span class="tag tag-room">${esc(e.room||'—')}</span></td>
         <td>${invig  ? `<span class="tag tag-invig">${esc(invig.name)}</span>`  : '<span style="color:var(--text-3)">—</span>'}</td>
         <td>${backup ? `<span class="tag tag-backup">${esc(backup.name)}</span>` : '<span style="color:var(--text-3)">—</span>'}</td>
         <td><span class="exam-status ${st.cls}">${st.label}</span></td>
@@ -653,7 +597,7 @@ async function sendOneEmail(exam, person, role) {
     exam_room:      exam.room || 'TBC',
     finish_time:    exam.finishTime || 'TBC',
     ext_finish:     exam.extFinishTime || 'N/A',
-    num_entries:    exam.entries,
+    num_entries:    exam.entries || 'N/A', // 🌟 Added manual trigger variable payload here
     role,
     readiness_time: addMins(exam.startTime, -20),
   };
@@ -695,7 +639,7 @@ async function manualNotify(examId) {
   showToast(failed===0 ? `${sent} email(s) sent ✓` : `${sent} sent, ${failed} failed`, sent>0?'success':'error');
 }
 
-/* ─── Automated check (GitHub Actions triggers this via runNotificationCheck) ─ */
+/* ─── Automated check ─── */
 async function runNotificationCheck() {
   const resultEl = document.getElementById('checkResult');
   const s = getSettings();
@@ -712,11 +656,10 @@ async function runNotificationCheck() {
   const toSend  = [];
 
   for (const exam of exams) {
-    if (exam.date !== today) continue; // Only today's exams need automated notify
+    if (exam.date !== today) continue;
     const startMins  = parseTimeToMins(exam.startTime);
     if (startMins == null) continue;
     const minsUntil  = startMins - nowMins;
-    // Window: notify if within [notifyMinutes-8, notifyMinutes+8] to handle 15-min cron cadence
     if (minsUntil < notifyMinutes - 8 || minsUntil > notifyMinutes + 8) continue;
 
     if (!exam.notifiedMain) {
@@ -865,7 +808,7 @@ function showToast(msg, type='') {
   clearTimeout(_toastT); _toastT=setTimeout(()=>t.classList.add('hidden'), 3400);
 }
 function esc(s) {
-  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');
 }
 function fmtDate(d) {
   try { return new Date(d+'T12:00:00Z').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}); }
