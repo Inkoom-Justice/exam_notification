@@ -220,7 +220,7 @@ function parseTimetable(csv) {
   }
 
   const C = {
-    date:      colNth('exam date', 2),  // 2nd occurrence = col 8 (actual exam datetime)
+    date:      col('exam date'),
     start:     col('start time'),
     finish:    col('finish time'),
     extMins:   col('ext. time in min'),
