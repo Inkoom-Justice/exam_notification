@@ -1,10 +1,6 @@
 /**
- * REGENT EXAM NOTIFIER — notify.js (GitHub Actions)
- * ─────────────────────────────────────────────────────────────────
- * Runs every 15 min via cron. Uses Warsaw time throughout.
- * Sends EmailJS notifications 60 min (configurable) before each exam.
- * Duplicate-send protection via data/sent-log.json committed to repo.
- * ─────────────────────────────────────────────────────────────────
+ * REGENT EXAM NOTIFIER — notify.js (GitHub Actions Autonomous Engine)
+ * Runs daily at 19:00 Warsaw time. Identifies and emails for TOMORROW's exams.
  */
 'use strict';
 const https = require('https');
@@ -17,13 +13,12 @@ const CFG = {
   ejsPublicKey:  process.env.EJS_PUBLIC_KEY   || '',
   ejsServiceId:  process.env.EJS_SERVICE_ID   || '',
   ejsTemplateId: process.env.EJS_TEMPLATE_ID  || '',
-  notifyMinutes: parseInt(process.env.NOTIFY_MINUTES || '60'),
   emailDomain:   process.env.EMAIL_DOMAIN     || 'regent.edu.pl',
 };
 
 const SENT_LOG = path.join(__dirname, '..', 'data', 'sent-log.json');
 
-/* ── INVIGILATORS (mirrors admin UI defaults) ────────────────── */
+/* ── INVIGILATORS ────────────────────────────────────────────── */
 const INVIGILATORS = [
   { name:'Anna Martowicz',      aliases:['AM','Anna M','Anna Martowicz']                        },
   { name:'Mariusz Krajewski',   aliases:['Mariusz','Krajewski','Mariusz Krajewski']             },
@@ -36,26 +31,23 @@ const INVIGILATORS = [
   { name:'Kristy Khemraj',      aliases:['Kristy','Kristy Khemraj','Kristy//','Khemraj']       },
   { name:'Justice Inkoom',      aliases:['Justice','Justice//','Justice Inkoom']                },
   { name:'Zipporah Bvalani',    aliases:['Zipporah','Zipporah//','Zipporah Bvalani']            },
-  { name:'Szymon Paczkowski',   aliases:['Szymon','Szymon//']                                   },
+  { name:'Szymon',              aliases:['Szymon','Szymon//']                                   },
 ];
 
-/* ── HELPERS ─────────────────────────────────────────────────── */
-
-/** Current date in Warsaw as "YYYY-MM-DD" */
-function warsawTodayISO() {
-  return new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Warsaw' });
+/* ── WARSAW TIME SYSTEM ──────────────────────────────────────── */
+function getWarsawTomorrowISO() {
+  const d = new Date();
+  // Force shift offset evaluation to Warsaw zone to prevent execution date boundary mismatches
+  const localizedStr = d.toLocaleString('en-US', { timeZone: 'Europe/Warsaw' });
+  const tomorrow = new Date(localizedStr);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  
+  const yyyy = tomorrow.getFullYear();
+  const mm = String(tomorrow.getMonth() + 1).padStart(2, '0');
+  const dd = String(tomorrow.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }
 
-/** Current Warsaw time as total minutes since midnight */
-function warsawNowMinutes() {
-  const t = new Date().toLocaleTimeString('en-GB', {
-    timeZone: 'Europe/Warsaw', hour: '2-digit', minute: '2-digit'
-  });
-  const [h, m] = t.split(':').map(Number);
-  return h * 60 + m;
-}
-
-/** "HH:MM:SS" or Excel fraction → minutes since midnight */
 function parseTimeToMins(raw) {
   if (!raw) return null;
   const s = raw.toString().trim();
@@ -67,320 +59,213 @@ function parseTimeToMins(raw) {
 
 function minsToTime(mins) {
   if (mins == null || isNaN(mins)) return '';
-  return `${String(Math.floor(mins/60)%24).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`;
+  return `${String(Math.floor(mins / 60) % 24).padStart(2,'0')}:${String(mins % 60).padStart(2,'0')}`;
 }
 
 function addMins(timeStr, delta) {
   const base = parseTimeToMins(timeStr);
-  return base != null ? minsToTime(base + delta) : '';
+  if (base == null) return '';
+  return minsToTime(base + delta);
 }
 
-function generateEmail(name) {
-  const clean = name.replace(/\s*\(.*?\)\s*/g, '').trim();
-  const parts = clean.toLowerCase().replace(/[^a-z\s]/g,'').trim().split(/\s+/);
-  return parts.length >= 2
-    ? `${parts[0]}.${parts[parts.length-1]}@${CFG.emailDomain}`
-    : `${parts[0]}@${CFG.emailDomain}`;
+function fmtDate(d) {
+  try { return new Date(d+'T12:00:00Z').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}); }
+  catch { return d; }
 }
 
-function resolveInvigilator(raw) {
-  if (!raw) return null;
-  const cleaned = raw.toString().replace(/\/+$/, '').trim();
+/* ── DATA RESOLUTION ─────────────────────────────────────────── */
+function resolveInvigilator(rawName) {
+  if (!rawName) return null;
+  const cleaned = rawName.toString().replace(/\/+$/, '').trim();
   if (!cleaned || cleaned === '-' || cleaned.toLowerCase() === 'nan') return null;
-  // Exact alias match
-  const found = INVIGILATORS.find(inv =>
-    inv.aliases.some(a => a.toLowerCase() === cleaned.toLowerCase())
-  );
-  if (found) return { name: found.name, email: generateEmail(found.name) };
-  // First-name partial match
-  const partial = INVIGILATORS.find(inv =>
-    inv.name.split(' ')[0].toLowerCase() === cleaned.split(' ')[0].toLowerCase()
-  );
-  if (partial) return { name: partial.name, email: generateEmail(partial.name) };
-  // Fallback: use raw value
-  return { name: cleaned, email: generateEmail(cleaned) };
+  const found = INVIGILATORS.find(inv => inv.aliases.some(a => a.trim().toLowerCase() === cleaned.toLowerCase()));
+  if (found) return { name: found.name, email: `${found.name.toLowerCase().replace(/[^a-z]/g,'')}@${CFG.emailDomain}` };
+  const fallbackEmail = `${cleaned.toLowerCase().replace(/\s+/g,'.').replace(/[^a-z.]/g,'')}@${CFG.emailDomain}`;
+  return { name: cleaned, email: fallbackEmail };
 }
 
-function fmtDate(dateStr) {
-  try {
-    return new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en-GB', {
-      weekday:'long', day:'numeric', month:'long', year:'numeric', timeZone:'UTC'
-    });
-  } catch { return dateStr; }
-}
-
-/* ── FETCH WITH REDIRECT FOLLOW ─────────────────────────────── */
-function fetchUrl(url, redirects = 0) {
-  return new Promise((resolve, reject) => {
-    if (redirects > 5) return reject(new Error('Too many redirects'));
-    https.get(url, { headers: { 'User-Agent': 'ExamNotifier/1.0' } }, res => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return fetchUrl(res.headers.location, redirects + 1).then(resolve).catch(reject);
-      }
-      if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => resolve(data));
-    }).on('error', reject);
-  });
-}
-
-/* ── CSV PARSER ──────────────────────────────────────────────── */
+/* ── PARSER ──────────────────────────────────────────────────── */
 function csvToRows(csv) {
   const rows = [];
   for (const line of csv.split('\n')) {
-    const row = []; let inQ = false, cell = '';
+    const row = []; let inQ=false, cell='';
     for (const ch of line) {
-      if (ch === '"') { inQ = !inQ; }
-      else if (ch === ',' && !inQ) { row.push(cell.trim()); cell = ''; }
-      else { cell += ch; }
+      if (ch==='"') { inQ=!inQ; }
+      else if (ch===',' && !inQ) { row.push(cell.trim()); cell=''; }
+      else { cell+=ch; }
     }
-    row.push(cell.trim());
-    rows.push(row);
+    row.push(cell.trim()); rows.push(row);
   }
   return rows;
 }
 
-function parseTimetable(csv) {
+function parseCSV(csv) {
   const rows = csvToRows(csv);
   let hi = -1;
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i].map(c => (c||'').toLowerCase());
-    if (r.some(c => c.includes('start time')) && r.some(c => c.includes('invigilator'))) {
-      hi = i; break;
-    }
+  for (let i=0; i<rows.length; i++) {
+    const r = rows[i].map(c=>(c||'').toLowerCase());
+    if (r.some(c=>c.includes('start time')) && r.some(c=>c.includes('invigilator'))) { hi=i; break; }
   }
-  if (hi === -1) throw new Error('Header row not found in CSV');
+  if (hi===-1) throw new Error("Headers row matching structure could not be identified.");
 
-  const H   = rows[hi].map(c => (c||'').toLowerCase().trim());
+  const H = rows[hi].map(c=>(c||'').toLowerCase().trim());
   const col = kw => H.findIndex(h => h.includes(kw.toLowerCase()));
 
   const C = {
-    date:      col('exam date'),
-    start:     col('start time'),
-    finish:    col('finish time'),
-    extMins:   col('ext. time in min'),
-    extFinish: col('ext. finish time'),
-    syllabus:  col('syllabus'),
-    component: col('component title'),
-    code:      col('code'),
-    room:      col('room'),
-    invig:     col('exam invigilator'),
-    backup:    col('backup invigilator'),
-    entries:   col('entries'),
-};
+    date: col('exam date'), room: col('room'), session: col('session'),
+    start: col('start time'), finish: col('finish time'), extFinish: col('ext. finish time'),
+    syllabus: col('syllabus'), component: col('component title'), code: col('code'),
+    entries: col('entries'), invig: col('exam invigilator'), backup: col('backup invigilator')
+  };
 
+  const list = [];
+  for (let i=hi+1; i<rows.length; i++) {
+    const r = rows[i]; if (!r || r.every(c=>!c)) continue;
+    const rawDate = (r[C.date]||'').toString().trim();
+    const rawStart = (r[C.start]||'').toString().trim();
+    const syllabus = (r[C.syllabus]||'').toString().trim();
+    if (!rawDate || !rawStart || !syllabus || rawDate==='NaN') continue;
 
-  const exams = [];
-  for (let i = hi + 1; i < rows.length; i++) {
-    const r = rows[i];
-    if (!r || r.every(c => !c)) continue;
-
-    const rawDate   = (r[C.date]     || '').toString().trim();
-    const rawStart  = (r[C.start]    || '').toString().trim();
-    const syllabus  = (r[C.syllabus] || '').toString().trim();
-    if (!rawDate || !rawStart || !syllabus || rawDate === 'NaN') continue;
-
-    // ── DATE PARSING ─────────────────────────────────────────────────
-    // Google Sheets CSV exports dates as "2026-05-21 00:00:00" (space separator).
-    // Passing this to new Date() causes UTC midnight → local-time off-by-one in UTC+2.
-    // We extract YYYY-MM-DD directly from the string — zero timezone risk.
     let dateStr = '';
-    const raw = rawDate.toString().trim();
-
-    if (/^\d{4}-\d{2}-\d{2}[T \d]/.test(raw)) {
-      dateStr = raw.substring(0, 10);                          // "2026-05-21"
-    } else if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
-      const [d, m, y] = raw.split('/'); dateStr = `${y}-${m}-${d}`;
-    } else if (/^\d{2}\/\d{2}\/\d{2}$/.test(raw)) {
-      const [d, m, y] = raw.split('/'); dateStr = `20${y}-${m}-${d}`;
-    } else if (/^\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}$/.test(raw)) {
-      const months = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
-                      jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
-      const parts  = raw.split(/\s+/);
-      const mon    = months[parts[1].toLowerCase().substring(0,3)] || '01';
-      const yr     = parts[2].length === 2 ? '20'+parts[2] : parts[2];
-      dateStr      = `${yr}-${mon}-${parts[0].padStart(2,'0')}`;
-    } else if (/^\d{5}$/.test(raw)) {
-      const serial = parseInt(raw) - (parseInt(raw) > 59 ? 1 : 0);
-      const ms     = new Date(Date.UTC(1899,11,31)).getTime() + serial * 86400000;
-      const d      = new Date(ms);
-      dateStr      = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+    if (/^\d{4}-\d{2}-\d{2}/.test(rawDate)) dateStr = rawDate.substring(0,10);
+    else if (/^\d{5}$/.test(rawDate)) {
+      const serial = parseInt(rawDate) - (parseInt(rawDate) > 59 ? 1 : 0);
+      const d = new Date(Date.UTC(1899, 11, 31) + serial * 86400000);
+      dateStr = d.toISOString().substring(0,10);
     }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue;
 
-    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue;
+    const startMins = parseTimeToMins(rawStart); if (startMins == null) continue;
+    const finishMins = parseTimeToMins(r[C.finish]);
+    const extMins = parseTimeToMins(r[C.extFinish]);
 
-    const startMins = parseTimeToMins(rawStart);
-    if (startMins == null) continue;
-
-    // Finish & extended finish
-    const finishRaw    = C.finish    >= 0 ? (r[C.finish]    || '').toString().trim() : '';
-    const extFinishRaw = C.extFinish >= 0 ? (r[C.extFinish] || '').toString().trim() : '';
-    const extMinsRaw   = C.extMins   >= 0 ? (r[C.extMins]   || '').toString().trim() : '';
-
-    const finishMins    = parseTimeToMins(finishRaw);
-    let   extFinishMins = parseTimeToMins(extFinishRaw);
-    if (extFinishMins == null && finishMins != null && extMinsRaw && extMinsRaw !== '-') {
-      const em = parseFloat(extMinsRaw);
-      if (!isNaN(em) && em > 0) extFinishMins = finishMins + Math.round(em);
-    }
-
-    const code    = C.code >= 0 ? (r[C.code] || '').toString().trim() : '';
-    const id      = `exam_${dateStr}_${minsToTime(startMins)}_${(code||syllabus).replace(/\W/g,'_')}`;
-
-    exams.push({
-		id, date: dateStr,
-		startTime:    minsToTime(startMins),
-		finishTime:   finishMins    != null ? minsToTime(finishMins)    : '',
-		extFinishTime:extFinishMins != null ? minsToTime(extFinishMins) : '',
-		syllabus,
-		component: C.component >= 0 ? (r[C.component] || '').toString().trim() : '',
-		room:      C.room      >= 0 ? (r[C.room]      || '').toString().trim() : '',
-		code,
-		invigRaw:  C.invig  >= 0 ? (r[C.invig]  || '').toString().trim() : '',
-		backupRaw: C.backup >= 0 ? (r[C.backup] || '').toString().trim() : '',
-		entries:   C.entries >= 0 ? (r[C.entries] || '').toString().trim() : '',
-	});
-
+    list.push({
+      id: `exam_${dateStr}_${minsToTime(startMins)}_${(r[C.code]||syllabus).replace(/\W/g,'_')}`,
+      date: dateStr, startTime: minsToTime(startMins),
+      finishTime: finishMins ? minsToTime(finishMins) : '',
+      extFinishTime: extMins ? minsToTime(extMins) : '',
+      session: C.session>=0 ? r[C.session] : '', room: C.room>=0 ? r[C.room] : '',
+      syllabus, component: C.component>=0 ? r[C.component] : '',
+      entries: C.entries>=0 ? r[C.entries] : '',
+      invigRaw: C.invig>=0 ? r[C.invig] : '', backupRaw: C.backup>=0 ? r[C.backup] : ''
+    });
   }
-  return exams;
+  return list;
 }
 
-/* ── SENT LOG ────────────────────────────────────────────────── */
-function loadSentLog() {
-  try {
-    if (fs.existsSync(SENT_LOG)) return JSON.parse(fs.readFileSync(SENT_LOG, 'utf8'));
-  } catch {}
-  return {};
-}
-
-function saveSentLog(log) {
-  const dir = path.dirname(SENT_LOG);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(SENT_LOG, JSON.stringify(log, null, 2));
-}
-
-/* ── EMAILJS REST SEND ───────────────────────────────────────── */
-function sendEmailJS(params) {
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({
-      service_id:      CFG.ejsServiceId,
-      template_id:     CFG.ejsTemplateId,
-      user_id:         CFG.ejsPublicKey,
-      template_params: params,
-    });
-    const req = https.request({
-      hostname: 'api.emailjs.com',
-      path:     '/api/v1.0/email/send',
-      method:   'POST',
-      headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-    }, res => {
+/* ── NETWORKING ──────────────────────────────────────────────── */
+function downloadCSV(url) {
+  return new Promise((res, rej) => {
+    const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
+    https.get(proxyUrl, response => {
       let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => {
-        if (res.statusCode === 200) resolve();
-        else reject(new Error(`EmailJS ${res.statusCode}: ${data}`));
+      response.on('data', chunk => data += chunk);
+      response.on('end', () => {
+        if (data.includes(',') && data.split('\n').length > 2) return res(data);
+        // Fallback directly to direct stream if proxy outputs junk
+        https.get(url, r2 => {
+          let d2 = ''; r2.on('data', c => d2 += c);
+          r2.on('end', () => res(d2));
+        }).on('error', rej);
       });
-    });
-    req.on('error', reject);
-    req.write(body); req.end();
+    }).on('error', rej);
   });
 }
 
-/* ── MAIN ────────────────────────────────────────────────────── */
-async function main() {
-  console.log(`\n═══ Exam Notifier · ${new Date().toISOString()} ═══`);
-  console.log(`    Warsaw time: ${new Date().toLocaleTimeString('en-GB',{timeZone:'Europe/Warsaw',hour:'2-digit',minute:'2-digit'})} · Today: ${warsawTodayISO()}`);
-
-  // Validate config
-  if (!CFG.sheetsUrl)     { console.error('❌ SHEETS_URL not set');      process.exit(1); }
-  if (!CFG.ejsPublicKey)  { console.error('❌ EJS_PUBLIC_KEY not set');  process.exit(1); }
-  if (!CFG.ejsServiceId)  { console.error('❌ EJS_SERVICE_ID not set');  process.exit(1); }
-  if (!CFG.ejsTemplateId) { console.error('❌ EJS_TEMPLATE_ID not set'); process.exit(1); }
-
-  // 1. Fetch sheet
-  console.log('📥 Fetching timetable…');
-  let csv;
-  try { csv = await fetchUrl(CFG.sheetsUrl); }
-  catch (e) { console.error('❌ Fetch failed:', e.message); process.exit(1); }
-
-  // 2. Parse
-  let exams;
-  try { exams = parseTimetable(csv); }
-  catch (e) { console.error('❌ Parse failed:', e.message); process.exit(1); }
-  console.log(`📋 ${exams.length} exams parsed`);
-
-  // 3. Find due notifications (Warsaw time window)
-  const today    = warsawTodayISO();
-  const nowMins  = warsawNowMinutes();
-  const sentLog  = loadSentLog();
-  const toSend   = [];
-
-  for (const exam of exams) {
-    if (exam.date !== today) continue; // Only today matters for 1-hr-before logic
-    const startMins = parseTimeToMins(exam.startTime);
-    if (startMins == null) continue;
-
-    const minsUntil = startMins - nowMins;
-    // Window: notifyMinutes ± 8 min to cover the 15-min cron gap
-    const lo = CFG.notifyMinutes - 8;
-    const hi = CFG.notifyMinutes + 8;
-    if (minsUntil < lo || minsUntil > hi) continue;
-
-    const invig  = resolveInvigilator(exam.invigRaw);
-    const backup = resolveInvigilator(exam.backupRaw);
-    const mkKey  = (id, role) => `${id}__${role}`;
-
-    if (invig  && !sentLog[mkKey(exam.id, 'main')])
-      toSend.push({ exam, person: invig,  role: 'Main Invigilator',   key: mkKey(exam.id,'main')   });
-    if (backup && !sentLog[mkKey(exam.id, 'backup')])
-      toSend.push({ exam, person: backup, role: 'Backup Invigilator', key: mkKey(exam.id,'backup') });
-  }
-
-  if (!toSend.length) {
-    console.log(`✅ Nothing due. Now: ${minsToTime(nowMins)} Warsaw · window: ${CFG.notifyMinutes}±8 min before start`);
-    return;
-  }
-
-  console.log(`📧 Sending ${toSend.length} notification(s)…`);
-
-  // 4. Send
-  for (const { exam, person, role, key } of toSend) {
-    const params = {
-		to_name:        person.name.split(' ')[0],
-		to_email:       person.email,
-		exam_subject:   exam.syllabus,
-		exam_component: exam.component,
-		exam_date:      fmtDate(exam.date),
-		exam_time:      exam.startTime,
-		exam_room:      exam.room || 'TBC',
-		finish_time:    exam.finishTime    || 'TBC',
-		ext_finish:     exam.extFinishTime || 'N/A',
-		num_entries:    exam.entries       || 'N/A',
-		role,
-		readiness_time: addMins(exam.startTime, -20),
-	};
-
-    try {
-      await sendEmailJS(params);
-      sentLog[key] = new Date().toISOString();
-      console.log(`  ✓ ${person.email} — ${role} — ${exam.syllabus} @ ${exam.startTime}`);
-    } catch(e) {
-      console.error(`  ✗ ${person.email}: ${e.message}`);
-    }
-    await new Promise(r => setTimeout(r, 500)); // rate-limit buffer
-  }
-
-  // 5. Save log + prune entries older than 90 days
-  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 90);
-  let pruned = 0;
-  for (const k of Object.keys(sentLog)) {
-    if (new Date(sentLog[k]) < cutoff) { delete sentLog[k]; pruned++; }
-  }
-  if (pruned) console.log(`🧹 Pruned ${pruned} old log entries`);
-  saveSentLog(sentLog);
-  console.log('💾 Sent-log updated');
-  console.log('═══ Done ═══\n');
+function sendEmailJS(params) {
+  return new Promise((res, rej) => {
+    const payload = JSON.stringify({
+      user_id: CFG.ejsPublicKey, service_id: CFG.ejsServiceId,
+      template_id: CFG.ejsTemplateId, template_params: params
+    });
+    const req = https.request({
+      hostname: 'api.emailjs.com', path: '/api/v1.0/email/send', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
+    }, response => {
+      let body = '';
+      response.on('data', c => body += c);
+      response.on('end', () => response.statusCode === 200 ? res() : rej(new Error(body || `HTTP ${response.statusCode}`)));
+    });
+    req.on('error', rej); req.write(payload); req.end();
+  });
 }
 
-main().catch(e => { console.error('Fatal:', e.message); process.exit(1); });
+/* ── RUNTIME EXECUTION ───────────────────────────────────────── */
+async function run() {
+  console.log(`🚀 Starting Autonomous Scheduler Process…`);
+  if (!CFG.sheetsUrl || !CFG.ejsPublicKey || !CFG.ejsServiceId || !CFG.ejsTemplateId) {
+    console.error("❌ Missing required operational target parameters. Process aborted.");
+    process.exit(1);
+  }
+
+  let sentLog = {};
+  try { if (fs.existsSync(SENT_LOG)) sentLog = JSON.parse(fs.readFileSync(SENT_LOG, 'utf8')); } catch(e) {}
+
+  const tomorrowStr = getWarsawTomorrowISO();
+  console.log(`📅 Targeting exams listed for tomorrow: ${tomorrowStr}`);
+
+  const csv = await downloadCSV(CFG.sheetsUrl);
+  const exams = parseCSV(csv);
+  const tomorrowExams = exams.filter(e => e.date === tomorrowStr);
+
+  console.log(`🔍 Total database rows mapped matching target date criteria: ${tomorrowExams.length}`);
+
+  let actionsDispatched = 0;
+  for (const exam of tomorrowExams) {
+    for (const [rawName, role, typeKey] of [
+      [exam.invigRaw, 'Main Invigilator', 'main'],
+      [exam.backupRaw, 'Backup Invigilator', 'backup']
+    ]) {
+      const person = resolveInvigilator(rawName);
+      if (!person) continue;
+
+      const logKey = `${exam.id}_${typeKey}`;
+      // Skip if already managed by manual override interface or prior processing loop
+      if (sentLog[logKey]) {
+        console.log(`  ⏭ Skipping ${person.email} (${role}) — already notified.`);
+        continue;
+      }
+
+      console.log(`  📧 Dispatching alert payload to ${person.email} for ${exam.syllabus}…`);
+      const payload = {
+        to_name:        person.name.split(' ')[0],
+        to_email:       person.email,
+        exam_subject:   exam.syllabus,
+        exam_component: exam.component || '',
+        exam_date:      fmtDate(exam.date),
+        exam_time:      exam.startTime,
+        exam_room:      exam.room || 'TBC',
+        finish_time:    exam.finishTime || 'TBC',
+        ext_finish:     exam.extFinishTime || 'N/A',
+        num_entries:    exam.entries || 'N/A',
+        role,
+        readiness_time: addMins(exam.startTime, -20)
+      };
+
+      try {
+        await sendEmailJS(payload);
+        // Write status mapping identifier configuration as explicitly "auto"
+        sentLog[logKey] = "auto";
+        actionsDispatched++;
+        console.log(`    ✓ Dispatched successfully.`);
+      } catch(err) {
+        console.error(`    ✗ Transmission failure: ${err.message}`);
+      }
+      await new Promise(r => setTimeout(r, 600));
+    }
+  }
+
+  // Retention cleanup optimization maintenance loop
+  const ninetyDaysAgo = new Date(); ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+  for (const k in sentLog) {
+    if (sentLog[k] !== "auto" && sentLog[k] !== "manual" && new Date(sentLog[k]) < ninetyDaysAgo) {
+      delete sentLog[k];
+    }
+  }
+
+  fs.mkdirSync(path.dirname(SENT_LOG), { recursive: true });
+  fs.writeFileSync(SENT_LOG, JSON.stringify(sentLog, null, 2), 'utf8');
+  console.log(`🏁 Operation finalized. Total alerts delivered: ${actionsDispatched}`);
+}
+
+run().catch(console.error);
