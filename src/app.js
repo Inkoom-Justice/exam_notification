@@ -653,7 +653,7 @@ async function sendOneEmail(exam, person, role) {
     exam_room:      exam.room || 'TBC',
     finish_time:    exam.finishTime || 'TBC',
     ext_finish:     exam.extFinishTime || 'N/A',
-    num_entries:    exam.entries || 'N/A',
+    num_entries:    exam.entries,
     role,
     readiness_time: addMins(exam.startTime, -20),
   };
