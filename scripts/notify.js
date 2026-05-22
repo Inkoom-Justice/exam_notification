@@ -36,7 +36,7 @@ const INVIGILATORS = [
   { name:'Kristy Khemraj',      aliases:['Kristy','Kristy Khemraj','Kristy//','Khemraj']       },
   { name:'Justice Inkoom',      aliases:['Justice','Justice//','Justice Inkoom']                },
   { name:'Zipporah Bvalani',    aliases:['Zipporah','Zipporah//','Zipporah Bvalani']            },
-  { name:'Szymon',              aliases:['Szymon','Szymon//']                                   },
+  { name:'Szymon Paczkowski',   aliases:['Szymon','Szymon//']                                   },
 ];
 
 /* ── HELPERS ─────────────────────────────────────────────────── */
@@ -108,6 +108,53 @@ function fmtDate(dateStr) {
     });
   } catch { return dateStr; }
 }
+
+
+function parseDateFlexible(raw) {
+  if (!raw) return null;
+  const s = raw.toString().trim();
+
+  // ISO or timestamp-like
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10);
+
+  // DD/MM/YYYY or DD/MM/YY
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
+    const [d, m, y] = s.split('/');
+    return `${y}-${m}-${d}`;
+  }
+  if (/^\d{2}\/\d{2}\/\d{2}$/.test(s)) {
+    const [d, m, y] = s.split('/');
+    return `20${y}-${m}-${d}`;
+  }
+
+  // DD MMM YYYY (e.g. 17 Apr 2026)
+  if (/^\d{1,2}\s+[A-Za-z]{3}\s+\d{4}$/.test(s)) {
+    const [d, mon, y] = s.split(/\s+/);
+    const months = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
+                    jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+    return `${y}-${months[mon.toLowerCase().substring(0,3)]}-${d.padStart(2,'0')}`;
+  }
+
+  // Weekday DD Month YYYY (e.g. Friday 17 April 2026)
+  if (/^[A-Za-z]+\s+\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}$/.test(s)) {
+    const parts = s.split(/\s+/);
+    const months = {january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',
+                    july:'07',august:'08',september:'09',october:'10',november:'11',december:'12'};
+    const mon = months[parts[2].toLowerCase()] || '01';
+    return `${parts[3]}-${mon}-${parts[1].padStart(2,'0')}`;
+  }
+
+  // Excel serial number
+  if (/^\d{5}$/.test(s)) {
+    const serial = parseInt(s) - (parseInt(s) > 59 ? 1 : 0);
+    const ms = new Date(Date.UTC(1899,11,31)).getTime() + serial * 86400000;
+    const d = new Date(ms);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+  }
+
+  return null;
+}
+
 
 /* ── FETCH WITH REDIRECT FOLLOW + CLEAR ERROR MESSAGES ─────── */
 function fetchUrl(url, redirects = 0) {
@@ -255,30 +302,8 @@ function parseTimetable(csv) {
     // Google Sheets CSV exports dates as "2026-05-21 00:00:00" (space separator).
     // Passing this to new Date() causes UTC midnight → local-time off-by-one in UTC+2.
     // We extract YYYY-MM-DD directly from the string — zero timezone risk.
-    let dateStr = '';
-    const raw = rawDate.toString().trim();
-
-    if (/^\d{4}-\d{2}-\d{2}[T \d]/.test(raw)) {
-      dateStr = raw.substring(0, 10);                          // "2026-05-21"
-    } else if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
-      const [d, m, y] = raw.split('/'); dateStr = `${y}-${m}-${d}`;
-    } else if (/^\d{2}\/\d{2}\/\d{2}$/.test(raw)) {
-      const [d, m, y] = raw.split('/'); dateStr = `20${y}-${m}-${d}`;
-    } else if (/^\d{1,2}\s+[A-Za-z]{3}\s+\d{2,4}$/.test(raw)) {
-      const months = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
-                      jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
-      const parts  = raw.split(/\s+/);
-      const mon    = months[parts[1].toLowerCase().substring(0,3)] || '01';
-      const yr     = parts[2].length === 2 ? '20'+parts[2] : parts[2];
-      dateStr      = `${yr}-${mon}-${parts[0].padStart(2,'0')}`;
-    } else if (/^\d{5}$/.test(raw)) {
-      const serial = parseInt(raw) - (parseInt(raw) > 59 ? 1 : 0);
-      const ms     = new Date(Date.UTC(1899,11,31)).getTime() + serial * 86400000;
-      const d      = new Date(ms);
-      dateStr      = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
-    }
-
-    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue;
+    const dateStr = parseDateFlexible(rawDate);
+    if (!dateStr) continue;
 
     const startMins = parseTimeToMins(rawStart);
     if (startMins == null) continue;
