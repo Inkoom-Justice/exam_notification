@@ -540,7 +540,7 @@ function renderTimetable() {
   <table class="data-table">
     <thead><tr>
       <th>Date</th><th>Start</th><th>Finish</th><th>Ext. End</th>
-      <th>Session</th><th>Subject</th><th>Component</th><th>Room</th>
+      <th>Session</th><th>Subject</th><th>Component</th><th>Entries</th><th>Room</th>
       <th>Main Invigilator</th><th>Backup</th><th>Status</th><th></th>
     </tr></thead>
     <tbody>${list.map(e => {
