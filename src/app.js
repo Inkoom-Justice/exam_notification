@@ -30,7 +30,7 @@ const DEFAULT_INVIGILATORS = [
   { id:'inv_9',  name:'Kristy Khemraj',      email:'', aliases:['Kristy','Kristy Khemraj','Kristy//','Khemraj'],       active:true },
   { id:'inv_10', name:'Justice Inkoom',      email:'', aliases:['Justice','Justice//','Justice Inkoom'],                active:true },
   { id:'inv_11', name:'Zipporah Bvalani',    email:'', aliases:['Zipporah','Zipporah//','Zipporah Bvalani'],            active:true },
-  { id:'inv_12', name:'Szymon',              email:'', aliases:['Szymon','Szymon//'],                                   active:true },
+  { id:'inv_12', name:'Szymon Paczkowski',   email:'', aliases:['Szymon','Szymon//'],                                   active:true },
 ];
 
 /* ─── STATE ────────────────────────────────────────────────────── */
@@ -350,6 +350,7 @@ function parseTimetableCSV(csv) {
     room:         col('room'),             // col 9
     session:      col('session'),          // col 10
     start:        col('start time'),       // col 11
+    entries:      col('entries'),
     readiness:    col('full-readiness'),   // col 12
     duration:     col('duration in min'),  // col 14
     finish:       col('finish time'),      // col 15
@@ -452,6 +453,7 @@ function parseTimetableCSV(csv) {
       id, date:dateStr, startTime, finishTime, extFinishTime,
       room:      C.room>=0      ? (r[C.room]     ||'').toString().trim() : '',
       session:   C.session>=0   ? (r[C.session]  ||'').toString().trim() : '',
+      entries:   C.entries>=0   ? (r[C.entries]  ||'').toString().trim() : '',
       syllabus,
       component: C.component>=0 ? (r[C.component]||'').toString().trim() : '',
       code,
@@ -553,6 +555,7 @@ function renderTimetable() {
         <td>${esc(e.session||'—')}</td>
         <td>${esc(e.syllabus)}</td>
         <td style="color:var(--text-2);font-size:12px">${esc(e.component)}</td>
+        <td><strong>${esc(e.entries || '—')}</strong></td>
         <td><span class="tag tag-room">${esc(e.room||'—')}</span></td>
         <td>${invig  ? `<span class="tag tag-invig">${esc(invig.name)}</span>`  : '<span style="color:var(--text-3)">—</span>'}</td>
         <td>${backup ? `<span class="tag tag-backup">${esc(backup.name)}</span>` : '<span style="color:var(--text-3)">—</span>'}</td>
@@ -650,6 +653,7 @@ async function sendOneEmail(exam, person, role) {
     exam_room:      exam.room || 'TBC',
     finish_time:    exam.finishTime || 'TBC',
     ext_finish:     exam.extFinishTime || 'N/A',
+    num_entries:    exam.entries || 'N/A',
     role,
     readiness_time: addMins(exam.startTime, -20),
   };
