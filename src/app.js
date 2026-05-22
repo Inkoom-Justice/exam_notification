@@ -121,9 +121,14 @@ function examStatus(exam) {
   if (endMins != null && nowMins >= endMins) return { cls:'status-past', label:'⚫ Past' };
   if (finishMins == null && nowMins > startMins + 30) return { cls:'status-past', label:'⚫ Past' };
 
+  // Read local/live variables loaded from your storage sync engine
+  if (exam.notifiedMain === 'auto' && exam.notifiedBackup === 'auto') return { cls:'status-notified', label:'✓ Notified auto' };
+  if (exam.notifiedMain === 'auto') return { cls:'status-notified', label:'✓ Main auto' };
+
   if (exam.notifiedMain && exam.notifiedBackup) return { cls:'status-notified', label:'✓ Notified' };
   if (exam.notifiedMain)                         return { cls:'status-notified', label:'✓ Main sent' };
 
+  
   const minsUntil = startMins - nowMins;
   if (minsUntil >= 0 && minsUntil <= notifyMinutes) {
     return { cls:'status-window', label:`⏰ Notify in ${minsUntil}m` };
@@ -393,6 +398,19 @@ function parseTimetableCSV(csv) {
     const id      = `exam_${dateStr}_${startTime}_${(code||syllabus).replace(/\W/g,'_')}`;
     const prev    = existing.get(id);
 
+    // Fetch status trackers explicitly matching historical structural configuration labels
+    let logMain = false;
+    let logBackup = false;
+    try {
+      // Attempt retrieval from cross-synced repository trackers
+      const globalSentLog = S.get('notifLog') || [];
+      // Or pull directly from locally updated cache
+      if (prev) {
+        logMain = prev.notifiedMain;
+        logBackup = prev.notifiedBackup;
+      }
+    } catch(e){}
+
     parsed.push({
       id, date:dateStr, startTime, finishTime, extFinishTime,
       room:      C.room>=0      ? (r[C.room]     ||'').toString().trim() : '',
@@ -401,12 +419,12 @@ function parseTimetableCSV(csv) {
       component: C.component>=0 ? (r[C.component]||'').toString().trim() : '',
       code,
       extFor:    C.extFor>=0    ? (r[C.extFor]   ||'').toString().trim() : '',
-      entries:   C.entries>=0   ? (r[C.entries]  ||'').toString().trim() : '', // 🌟 Added extraction property logic
+      entries:   C.entries>=0   ? (r[C.entries]  ||'').toString().trim() : '',
       invigRaw:  C.invig>=0     ? (r[C.invig]    ||'').toString().trim() : '',
       backupRaw: C.backup>=0    ? (r[C.backup]   ||'').toString().trim() : '',
       comments:  C.comments>=0  ? (r[C.comments] ||'').toString().trim() : '',
-      notifiedMain:   prev ? prev.notifiedMain   : false,
-      notifiedBackup: prev ? prev.notifiedBackup : false,
+      notifiedMain:   logMain,
+      notifiedBackup: logBackup,
     });
   }
 
@@ -624,8 +642,8 @@ async function manualNotify(examId) {
     if (!person) continue;
     try {
       await sendOneEmail(exam, person, role);
-      if (type==='main')   exam.notifiedMain   = true;
-      if (type==='backup') exam.notifiedBackup = true;
+      if (type==='main')   exam.notifiedMain   = 'manual';
+      if (type==='backup') exam.notifiedBackup = 'manual';
       sent++;
     } catch(e) {
       logEntry(exam, person.name, role, resolveEmail(person), false, e.text||e.message);
