@@ -1,169 +1,165 @@
-# 🎓 Regent Exam Notifier
+# 🎓 Regent Exam Notifier v2
 
-Automated email notification system for exam invigilators at Regent.
-Sends emails **1 hour before each exam** to both the main and backup invigilator.
-
-Live timetable is read directly from your Google Sheet — no manual uploads needed.
+Production-ready exam invigilation notification system.
+Firebase-backed · Multi-invigilator · Archive system · PDF compile · Warsaw timezone.
 
 ---
 
-## 🗂 Project Structure
+## What's new in v2
+
+| Feature | Detail |
+|---|---|
+| **Firebase persistence** | All data stored in Firestore — available on any device instantly |
+| **Timetable archive** | Save any timetable permanently; browse & restore historical records |
+| **Compile PDF** | Generate per-invigilator schedule PDFs and email them automatically |
+| **Multi-invigilator** | Semicolon/comma-separated names all notified individually |
+| **CSV parsing fixed** | Handles duplicate "Exam Date" columns and quoted commas correctly |
+| **Entries field** | Number of students read from sheet and included in all emails |
+
+---
+
+## Project Structure
 
 ```
-exam-notifier/
-├── index.html              ← Admin dashboard (hosted on GitHub Pages)
+regent-notifier/
+├── index.html                   ← Admin dashboard (GitHub Pages)
 ├── src/
-│   ├── app.js              ← Dashboard JS logic
-│   └── style.css           ← Styles
+│   ├── app.js                   ← Full dashboard logic (ES module)
+│   ├── firebase-config.js       ← Your Firebase credentials (fill in)
+│   ├── firebase-service.js      ← All Firestore operations
+│   └── shared.css               ← Styles
 ├── scripts/
-│   ├── notify.js           ← Node.js notification engine (run by GitHub Actions)
+│   ├── notify.js                ← GitHub Actions notification engine
 │   └── package.json
 ├── data/
-│   └── sent-log.json       ← Tracks which notifications have been sent (auto-updated)
+│   └── sent-log.json            ← Duplicate-prevention log (auto-committed)
 └── .github/workflows/
-    └── notify.yml          ← GitHub Actions cron schedule
+    └── notify.yml               ← Cron: daily at 19:00 Warsaw
 ```
 
 ---
 
-## 🚀 Setup Guide (Step-by-Step)
+## Setup Guide
 
-### Step 1 — Fork / Push to GitHub
+### Step 1 — Firebase
 
-1. Create a new GitHub repository (e.g. `regent-exam-notifier`)
-2. Push all these files to it
-3. Go to **Settings → Pages** and set the source to `main` branch / `root` folder
-4. Your dashboard will be live at `https://yourusername.github.io/regent-exam-notifier/`
+1. Go to https://console.firebase.google.com
+2. Create project → name it `regent-exam-notifier`
+3. **Firestore Database** → Create database → Production mode → `europe-west` region
+4. **Authentication** → Get Started → Enable **Anonymous** sign-in
+5. **Project Settings** → Your apps → `</>` Web → Register → copy config values
+6. Paste values into `src/firebase-config.js`
+7. **Firestore → Rules** → paste these rules and Publish:
 
----
-
-### Step 2 — Publish Your Google Sheet as CSV
-
-1. Open your Google Sheet
-2. Go to **File → Share → Publish to web**
-3. Under "Link", select the tab **"Wygenerowania - chronologicznie"**
-4. Change format to **CSV**
-5. Click **Publish** and copy the URL
-
-The URL looks like:
 ```
-https://docs.google.com/spreadsheets/d/1tmse7T72uVAC8S0ONDA8MdM75AXLFDFECtnzK_1qBjo/pub?gid=1559134635&single=true&output=csv
-```
-
----
-
-### Step 3 — Set Up EmailJS (Free)
-
-1. Go to [https://emailjs.com](https://emailjs.com) and create a free account
-2. **Add Email Service**: Connect Gmail (or any SMTP)
-3. **Create Email Template** with this exact content:
-
-**Subject:**
-```
-⏰ Exam Reminder: {{exam_subject}} — Today at {{exam_time}}
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
 ```
 
-**Body:**
-```
-Dear {{to_name}},
+### Step 2 — Google Sheet
 
-This is your reminder that you are scheduled as **{{role}}** for the following exam:
+1. Open your timetable sheet → **File → Share → Publish to web**
+2. Select the `Wygenerowania - chronologicznie` tab → **CSV** → Publish
+3. Copy the `/pub?gid=…&output=csv` URL
 
-Subject:    {{exam_subject}}
-Paper:      {{exam_component}}
-Date:       {{exam_date}}
-Start Time: {{exam_time}}
-Room:       {{exam_room}}
+### Step 3 — EmailJS
 
-Please be ready and in the room by {{readiness_time}} (20 minutes before start).
+1. Sign up at https://emailjs.com (free)
+2. Add Email Service (Gmail recommended)
+3. Create Email Template with these variables:
 
-If you have any questions, please contact the Exams Office immediately.
-
-Best regards,
-Regent Exams Office
-```
-
-4. Note down your:
-   - **Public Key** (Account → API Keys)
-   - **Service ID** (Email Services)
-   - **Template ID** (Email Templates)
-
----
-
-### Step 4 — Add GitHub Secrets
-
-Go to your repo → **Settings → Secrets and variables → Actions**
-
-Add these **Secrets** (sensitive):
-| Secret Name | Value |
+| Variable | Value |
 |---|---|
-| `SHEETS_URL` | The CSV URL from Step 2 |
-| `EJS_PUBLIC_KEY` | Your EmailJS Public Key |
-| `EJS_SERVICE_ID` | Your EmailJS Service ID |
-| `EJS_TEMPLATE_ID` | Your EmailJS Template ID |
+| `{{to_name}}` | First name |
+| `{{to_email}}` | Recipient email |
+| `{{exam_subject}}` | Subject name |
+| `{{exam_component}}` | Paper name |
+| `{{exam_date}}` | Formatted date |
+| `{{exam_time}}` | Start time |
+| `{{finish_time}}` | Normal end time |
+| `{{ext_finish}}` | Extended end (or N/A) |
+| `{{exam_room}}` | Room |
+| `{{num_entries}}` | Number of students |
+| `{{role}}` | Main or Backup Invigilator |
+| `{{readiness_time}}` | 20 min before start |
 
-Add these **Variables** (non-sensitive):
-| Variable Name | Value |
-|---|---|
-| `NOTIFY_MINUTES` | `60` |
-| `EMAIL_DOMAIN` | `regent.edu.pl` |
-| `TIMEZONE` | `Europe/Warsaw` |
+### Step 4 — GitHub
 
----
+1. Push all files to your GitHub repo
+2. **Settings → Pages** → Source: `main` branch / root
+3. **Settings → Secrets → Actions** → add:
+   - `SHEETS_URL` — your published CSV URL
+   - `EJS_PUBLIC_KEY` — EmailJS public key
+   - `EJS_SERVICE_ID` — EmailJS service ID
+   - `EJS_TEMPLATE_ID` — EmailJS template ID
+4. **Settings → Actions → General → Workflow permissions** → Read and write permissions
 
-### Step 5 — Configure the Admin Dashboard
+### Step 5 — First run
 
 1. Visit your GitHub Pages URL
-2. Log in with the default PIN: **1234** (change it in Settings immediately)
-3. Go to **Settings → Google Sheets** and paste the CSV URL
-4. Go to **Settings → EmailJS Config** and fill in your keys
-5. Click **🔄 Sync from Google Sheets** on the Dashboard to load the timetable
-6. You should see all your exams listed
+2. Log in (default PIN: **1234**)
+3. Go to **Settings** → fill in Google Sheets URL and EmailJS keys → Save
+4. Dashboard → **🔄 Sync Google Sheets**
+5. You should see all exams listed with correct dates and statuses
 
 ---
 
-### Step 6 — Verify GitHub Actions
+## How notifications work
 
-1. Go to your repo → **Actions** tab
-2. Click **Exam Notification Checker** → **Run workflow** to test it manually
-3. Check the logs — you should see it fetch the sheet and report any due notifications
+**Two layers — notifications always go out:**
 
-The workflow runs **every 15 minutes** automatically during school hours (Mon–Sat, 07:00–19:00 Warsaw time).
+1. **Browser engine** — when you're logged into the dashboard, a 60-second loop checks if any exam starts in ~60 minutes and sends automatically
+2. **GitHub Actions** — runs daily at 19:00 Warsaw time, sends for all of tomorrow's exams regardless of whether anyone is logged in
 
----
-
-## 🔄 Using for a New Exam Period
-
-When a new exam period starts:
-1. Update your Google Sheet with the new timetable
-2. The system will automatically pick up the new exams next time it syncs
-3. The `data/sent-log.json` file will be automatically pruned of old entries (90-day retention)
-4. No other changes needed
+Both layers use the same sent-log to prevent duplicates.
 
 ---
 
-## 📧 Invigilator Email Addresses
+## Timetable Archive
 
-Emails are auto-generated as `firstname.surname@regent.edu.pl`.
-
-You can override any address in the **Invigilators** tab of the dashboard.
-
----
-
-## 🛡 Security Notes
-
-- The admin dashboard is PIN-protected (client-side)
-- All secrets (EmailJS keys, Sheet URL) are stored in GitHub Secrets — never in the code
-- The sent-log prevents duplicate notifications even if the action runs multiple times
+- Click **💾 Save Timetable** (dashboard or timetable tab) to archive
+- Browse all archives in the **Saved Timetables** tab
+- Click **View** to see the full exam list from any archive
+- Click **Restore** to make an archived timetable the active one
+- Archives are stored permanently in Firebase — no limit
 
 ---
 
-## 🐛 Troubleshooting
+## Compile Feature
+
+In the **Invigilators** tab, click 📋 next to any invigilator to:
+- See their complete invigilation schedule in a modal
+- Click **Generate & Email PDF** to:
+  - Download a professionally formatted A4 landscape PDF
+  - Automatically email it to the invigilator via EmailJS
+
+---
+
+## Multi-invigilator support
+
+If your sheet has multiple names in the invigilator columns, separate them with semicolons:
+
+```
+Anna Martowicz; Roger Messer; Marta Szweda
+```
+
+The system will send individual emails to each person, logged separately.
+
+---
+
+## Troubleshooting
 
 | Problem | Solution |
 |---|---|
-| Sheet not loading | Make sure the sheet is published to the web as CSV (File → Share → Publish to web) |
-| Emails not sending | Check EmailJS keys in Settings; verify the template variable names match exactly |
-| Duplicate notifications | Check `data/sent-log.json` — it prevents double-sends |
-| Wrong notification time | Check `NOTIFY_MINUTES` variable in GitHub Actions settings |
-| Actions not running | Free GitHub accounts have Actions limits; check the Actions tab for errors |
+| 0 exams loaded | Check sheet tab GID in the published URL matches the timetable tab |
+| Firebase offline | Check `src/firebase-config.js` has real values (not placeholders) |
+| Emails not sending | Test via Settings → Send Test Email; verify all 3 EmailJS IDs |
+| PIN not working | Default is `1234`; if changed, use the new PIN |
+| GitHub Actions 403 | Settings → Actions → General → set Read and write permissions |
+| Actions 401 on sheet | Sheet must be set to "Anyone with link" and published as CSV |
