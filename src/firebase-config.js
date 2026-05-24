@@ -5,12 +5,12 @@
    ═══════════════════════════════════════════════════════════════ */
 
 const FIREBASE_CONFIG = {
-  apiKey:            "YOUR_API_KEY",
-  authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId:         "YOUR_PROJECT_ID",
-  storageBucket:     "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId:             "YOUR_APP_ID"
+  apiKey: "AIzaSyAG9ZmRZkjwynOSdkmfPIQhB-rNoSqjMJg",
+  authDomain: "regent-exam-notifier.firebaseapp.com",
+  projectId: "regent-exam-notifier",
+  storageBucket: "regent-exam-notifier.firebasestorage.app",
+  messagingSenderId: "568912808477",
+  appId: "1:568912808477:web:c1af725f0cdd4ade7ed4f4"
 };
 
 /* ── How to get these values ───────────────────────────────────
