@@ -1,7 +1,0 @@
-{
-  "name": "regent-exam-notifier-scripts",
-  "version": "2.0.0",
-  "description": "GitHub Actions notification engine for Regent Exam Notifier",
-  "main": "notify.js",
-  "engines": { "node": ">=18" }
-}
