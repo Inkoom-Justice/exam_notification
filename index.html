@@ -31,8 +31,18 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);font-size:
 
 /* ═══════════════════════ LOGIN ═══════════════════════ */
 .login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;
-  background:linear-gradient(135deg,#1A1A2E 0%,#16213E 55%,#0F3460 100%)}
-.login-card{background:#fff;border-radius:20px;padding:48px 40px;width:380px;max-width:92vw;
+  background:linear-gradient(135deg,#740001 0%,#5a0001 55%,#3d0000 100%);overflow:hidden}
+/* Split layout: logo left panel, form right panel */
+.login-split{display:flex;align-items:center;justify-content:center;width:100%;max-width:900px;
+  padding:24px;gap:0;position:relative}
+.login-split::after{content:'';position:absolute;left:50%;top:10%;bottom:10%;
+  width:1px;background:rgba(255,255,255,.25);transform:translateX(-50%)}
+.login-logo-panel{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:40px;transform:translateX(50%);opacity:0;animation:splitLeft 0.7s cubic-bezier(.4,0,.2,1) 0.1s forwards}
+.login-logo-panel img{width:280px;max-width:90%;filter:brightness(0) invert(1) drop-shadow(0 4px 24px rgba(0,0,0,.4))}
+.login-card-panel{flex:1;display:flex;align-items:center;justify-content:center;
+  transform:translateX(-50%);opacity:0;animation:splitRight 0.7s cubic-bezier(.4,0,.2,1) 0.1s forwards}
+.login-card{background:#fff;border-radius:20px;padding:48px 40px;width:380px;max-width:100%;
   box-shadow:var(--shadow-lg);text-align:center}
 .login-logo{margin-bottom:24px}
 .logo-icon{font-size:52px;margin-bottom:12px}
@@ -41,6 +51,17 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);font-size:
 .login-sub{color:var(--text-2);font-size:13px;margin-bottom:24px}
 .login-hint{font-size:12px;color:var(--text-3);margin-top:14px}
 .login-err{color:var(--accent);font-size:13px;font-weight:600;margin-top:12px;min-height:20px}
+@keyframes splitLeft{to{transform:translateX(0);opacity:1}}
+@keyframes splitRight{to{transform:translateX(0);opacity:1}}
+@media(max-width:640px){
+  .login-split{flex-direction:column;gap:32px}
+  .login-split::after{display:none}
+  .login-logo-panel{padding:20px;transform:translateY(-30px)}
+  .login-logo-panel img{width:180px}
+  .login-card-panel{transform:translateY(30px);width:100%}
+  @keyframes splitLeft{to{transform:translateY(0);opacity:1}}
+  @keyframes splitRight{to{transform:translateY(0);opacity:1}}
+}
 
 /* ═══════════════════════ LAYOUT ═══════════════════════ */
 .app{display:flex;min-height:100vh}
@@ -274,19 +295,27 @@ body{font-family:var(--font-b);background:var(--bg);color:var(--text);font-size:
 
 <!-- ══════════════ LOGIN ══════════════ -->
 <div id="loginScreen" class="login-screen">
-  <div class="login-card">
-    <div class="login-logo">
-      <div class="logo-icon">🎓</div>
-      <h1>Regent Exam<br/><em>Notifier</em></h1>
+  <div class="login-split">
+    <!-- Logo panel — slides in from center to the LEFT -->
+    <div class="login-logo-panel">
+      <img src="src/regent-logo.png" alt="Regent College International Schools" />
     </div>
-    <p class="login-sub">Admin access required</p>
-    <div class="input-group">
-      <label>Admin PIN</label>
-      <input type="password" id="pinInput" maxlength="6" onkeydown="if(event.key==='Enter')login()" placeholder="Enter PIN" autocomplete="off" />
+    <!-- Form panel — slides in from center to the RIGHT -->
+    <div class="login-card-panel">
+      <div class="login-card">
+        <div class="login-logo">
+          <h1>Regent Exam<br/><em>Notifier</em></h1>
+        </div>
+        <p class="login-sub">Admin access required</p>
+        <div class="input-group">
+          <label>Admin PIN</label>
+          <input type="password" id="pinInput" maxlength="6" onkeydown="if(event.key==='Enter')login()" placeholder="Enter PIN" autocomplete="off" />
+        </div>
+        <button class="btn-primary" id="loginBtn" style="width:100%" onclick="login()">Unlock Dashboard</button>
+        <div class="login-err" id="loginErr"></div>
+        <p class="login-hint">Default PIN: <strong>1234</strong> — change it in Settings after login</p>
+      </div>
     </div>
-    <button class="btn-primary" id="loginBtn" style="width:100%" onclick="login()">Unlock Dashboard</button>
-    <div class="login-err" id="loginErr"></div>
-    <p class="login-hint">Default PIN: <strong>1234</strong> — change it in Settings after login</p>
   </div>
 </div>
 

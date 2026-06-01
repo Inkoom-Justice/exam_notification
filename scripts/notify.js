@@ -1,6 +1,12 @@
 /**
  * REGENT EXAM NOTIFIER — notify.js (GitHub Actions Autonomous Engine)
  * Runs daily at 19:00 Warsaw time. Identifies and emails for TOMORROW's exams.
+ *
+ * DATA SOURCE PRIORITY:
+ *   1. Firebase Firestore (clean, pre-validated data already in the system)
+ *   2. Google Sheets CSV (fallback only if Firestore has no exams)
+ *
+ * This means the spreadsheet no longer needs to be intact at notification time.
  */
 'use strict';
 const https = require('https');
@@ -14,6 +20,8 @@ const CFG = {
   ejsServiceId:  process.env.EJS_SERVICE_ID   || '',
   ejsTemplateId: process.env.EJS_TEMPLATE_ID  || '',
   emailDomain:   process.env.EMAIL_DOMAIN     || 'regent.edu.pl',
+  firebaseSA:    process.env.FIREBASE_SERVICE_ACCOUNT || '',
+  projectId:     process.env.FIREBASE_PROJECT_ID || 'regent-exam-notifier',
 };
 
 const SENT_LOG = path.join(__dirname, '..', 'data', 'sent-log.json');
@@ -34,14 +42,12 @@ const INVIGILATORS = [
   { name:'Szymon',              aliases:['Szymon','Szymon//']                                   },
 ];
 
-/* ── WARSAW TIME SYSTEM ──────────────────────────────────────── */
+/* ── WARSAW TIME ─────────────────────────────────────────────── */
 function getWarsawTomorrowISO() {
   const d = new Date();
-  // Force shift offset evaluation to Warsaw zone to prevent execution date boundary mismatches
   const localizedStr = d.toLocaleString('en-US', { timeZone: 'Europe/Warsaw' });
   const tomorrow = new Date(localizedStr);
   tomorrow.setDate(tomorrow.getDate() + 1);
-  
   const yyyy = tomorrow.getFullYear();
   const mm = String(tomorrow.getMonth() + 1).padStart(2, '0');
   const dd = String(tomorrow.getDate()).padStart(2, '0');
@@ -51,25 +57,18 @@ function getWarsawTomorrowISO() {
 function parseTimeToMins(raw) {
   if (!raw) return null;
   let s = raw.toString().trim();
-
   if (/^\d+\.\d+$/.test(s)) return Math.round(parseFloat(s) * 24 * 60);
-
   s = s.replace(/^~+\s*/, '');
   s = s.replace(/^\s*(circa|approx(?:imately)?|around|about|est\.?|c\.)\s*/i, '').trim();
-
   const ampmMatch = s.match(/\b(a\.?m\.?|p\.?m\.?)\b/i);
   const ampm = ampmMatch ? ampmMatch[1].replace(/\./g, '').toLowerCase() : null;
   s = s.replace(/\b(a\.?m\.?|p\.?m\.?)\b/i, '').trim();
-
   const match = s.match(/^(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?/);
   if (!match) return null;
-
   let h = parseInt(match[1]);
   const m = match[2] ? parseInt(match[2]) : 0;
-
   if (ampm === 'pm' && h < 12) h += 12;
   if (ampm === 'am' && h === 12) h = 0;
-
   return h * 60 + m;
 }
 
@@ -89,7 +88,7 @@ function fmtDate(d) {
   catch { return d; }
 }
 
-/* ── DATA RESOLUTION ─────────────────────────────────────────── */
+/* ── INVIGILATOR RESOLUTION ──────────────────────────────────── */
 function resolveInvigilator(rawName) {
   if (!rawName) return null;
   const cleaned = rawName.toString().replace(/\/+$/, '').trim();
@@ -100,7 +99,133 @@ function resolveInvigilator(rawName) {
   return { name: cleaned, email: fallbackEmail };
 }
 
-/* ── PARSER ──────────────────────────────────────────────────── */
+/* ── FIRESTORE REST API ───────────────────────────────────────── */
+// Uses Firebase Admin SDK via service account — no spreadsheet dependency.
+
+async function getAccessToken(serviceAccount) {
+  // Create a JWT and exchange it for a Google access token
+  const { private_key, client_email } = serviceAccount;
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    iss: client_email,
+    scope: 'https://www.googleapis.com/auth/datastore',
+    aud: 'https://oauth2.googleapis.com/token',
+    exp: now + 3600,
+    iat: now,
+  };
+
+  // Encode JWT manually (no external dependencies)
+  const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
+  const body   = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const unsigned = `${header}.${body}`;
+
+  const crypto = require('crypto');
+  const sign   = crypto.createSign('RSA-SHA256');
+  sign.update(unsigned);
+  const signature = sign.sign(private_key, 'base64url');
+  const jwt = `${unsigned}.${signature}`;
+
+  // Exchange JWT for access token
+  return new Promise((res, rej) => {
+    const postData = `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`;
+    const req = https.request({
+      hostname: 'oauth2.googleapis.com',
+      path:     '/token',
+      method:   'POST',
+      headers:  { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(postData) }
+    }, r => {
+      let d = '';
+      r.on('data', c => d += c);
+      r.on('end', () => {
+        try {
+          const parsed = JSON.parse(d);
+          if (parsed.access_token) res(parsed.access_token);
+          else rej(new Error(parsed.error_description || 'Token exchange failed'));
+        } catch(e) { rej(e); }
+      });
+    });
+    req.on('error', rej);
+    req.write(postData);
+    req.end();
+  });
+}
+
+async function getExamsFromFirestore() {
+  if (!CFG.firebaseSA) {
+    console.log('  ℹ No FIREBASE_SERVICE_ACCOUNT secret — skipping Firestore.');
+    return null;
+  }
+  try {
+    const serviceAccount = JSON.parse(CFG.firebaseSA);
+    const token = await getAccessToken(serviceAccount);
+    const projectId = serviceAccount.project_id || CFG.projectId;
+
+    return new Promise((res, rej) => {
+      const firestorePath = `/v1/projects/${projectId}/databases/(default)/documents/appdata/exams`;
+      https.get({
+        hostname: 'firestore.googleapis.com',
+        path:     firestorePath,
+        headers:  { 'Authorization': `Bearer ${token}` }
+      }, r => {
+        let d = '';
+        r.on('data', c => d += c);
+        r.on('end', () => {
+          try {
+            const doc = JSON.parse(d);
+            if (doc.error) { console.warn('  ⚠ Firestore error:', doc.error.message); return res(null); }
+            // Firestore stores arrays as { arrayValue: { values: [...] } }
+            const arrayValues = doc.fields?.value?.arrayValue?.values || [];
+            const exams = arrayValues.map(v => {
+              const fields = v.mapValue?.fields || {};
+              const str = k => fields[k]?.stringValue || '';
+              const bool = k => fields[k]?.booleanValue || false;
+              return {
+                id:            str('id'),
+                date:          str('date'),
+                startTime:     str('startTime'),
+                finishTime:    str('finishTime'),
+                extFinishTime: str('extFinishTime'),
+                room:          str('room'),
+                session:       str('session'),
+                syllabus:      str('syllabus'),
+                component:     str('component'),
+                entries:       str('entries'),
+                invigRaw:      str('invigRaw'),
+                backupRaw:     str('backupRaw'),
+                notifiedMain:  fields['notifiedMain']?.stringValue || bool('notifiedMain'),
+                notifiedBackup:fields['notifiedBackup']?.stringValue || bool('notifiedBackup'),
+              };
+            }).filter(e => e.date && e.syllabus);
+            console.log(`  ☁ Loaded ${exams.length} exams from Firestore ✓`);
+            res(exams.length > 0 ? exams : null);
+          } catch(e) { console.warn('  ⚠ Firestore parse error:', e.message); res(null); }
+        });
+      }).on('error', e => { console.warn('  ⚠ Firestore request error:', e.message); res(null); });
+    });
+  } catch(e) {
+    console.warn('  ⚠ Firestore access failed:', e.message);
+    return null;
+  }
+}
+
+/* ── GOOGLE SHEETS FALLBACK ──────────────────────────────────── */
+function downloadCSV(url) {
+  return new Promise((res, rej) => {
+    const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
+    https.get(proxyUrl, response => {
+      let data = '';
+      response.on('data', chunk => data += chunk);
+      response.on('end', () => {
+        if (data.includes(',') && data.split('\n').length > 2) return res(data);
+        https.get(url, r2 => {
+          let d2 = ''; r2.on('data', c => d2 += c);
+          r2.on('end', () => res(d2));
+        }).on('error', rej);
+      });
+    }).on('error', rej);
+  });
+}
+
 function csvToRows(csv) {
   const rows = [];
   for (const line of csv.split('\n')) {
@@ -126,30 +251,28 @@ function parseCSV(csv) {
 
   const H = rows[hi].map(c=>(c||'').toLowerCase().trim());
   const col     = kw => H.findIndex(h => h.includes(kw.toLowerCase()));
-  // colLast picks the LAST column matching kw — the sheet has two "Exam Date" columns;
-  // the later one is the actual datetime value.
   const colLast = kw => { let idx=-1; H.forEach((h,i)=>{ if(h.includes(kw.toLowerCase())) idx=i; }); return idx; };
 
   const C = {
-    date:      colLast('exam date'),       // second "Exam Date" col = actual datetime
-    entries:   6,                          // hardcoded — student count, col 6 not col 26
-    room:      col('room'),               // col 9
-    session:   col('session'),            // col 10
-    start:     col('start time'),         // col 11
-    finish:    col('finish time'),        // col 15
-    extFinish: col('ext. finish time'),   // col 17
-    syllabus:  col('syllabus'),           // col 3
-    component: col('component title'),    // col 4
-    code:      col('code'),              // col 7
-    invig:     col('exam invigilator'),  // col 20
-    backup:    col('backup invigilator') // col 21
+    date:      colLast('exam date'),
+    room:      col('room'),
+    session:   col('session'),
+    start:     col('start time'),
+    finish:    col('finish time'),
+    extFinish: col('ext. finish time'),
+    syllabus:  col('syllabus'),
+    component: col('component title'),
+    code:      col('code'),
+    entries:   6,
+    invig:     col('exam invigilator'),
+    backup:    col('backup invigilator'),
   };
 
   const list = [];
   const seenIds = new Set();
   for (let i=hi+1; i<rows.length; i++) {
     const r = rows[i]; if (!r || r.every(c=>!c)) continue;
-    const rawDate = (r[C.date]||'').toString().trim();
+    const rawDate  = (r[C.date]||'').toString().trim();
     const rawStart = (r[C.start]||'').toString().trim();
     const syllabus = (r[C.syllabus]||'').toString().trim();
     if (!rawDate || !rawStart || !syllabus || rawDate==='NaN') continue;
@@ -163,7 +286,6 @@ function parseCSV(csv) {
       const [d,m,y] = rawDate.split('/'); dateStr = `20${y}-${m}-${d}`;
     }
     else {
-      // Text dates: "29 May 2026", "Friday 29 May 2026", "Fri 29 May 2026", etc.
       const MONTHS = {
         january:'01',february:'02',march:'03',april:'04',
         may:'05',june:'06',july:'07',august:'08',
@@ -190,46 +312,31 @@ function parseCSV(csv) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue;
 
     const startMins = parseTimeToMins(rawStart); if (startMins == null) continue;
-    const finishMins = parseTimeToMins(r[C.finish]);
-    const extMins = parseTimeToMins(r[C.extFinish]);
+    const finishMins   = parseTimeToMins(r[C.finish]);
+    const extMins      = parseTimeToMins(r[C.extFinish]);
+
+    let id = `exam_${dateStr}`;
+    if (seenIds.has(id)) { let n=2; while(seenIds.has(`${id}_${n}`)) n++; id=`${id}_${n}`; }
+    seenIds.add(id);
 
     list.push({
-      id: (() => {
-        let _id = `exam_${dateStr}`;
-        if (seenIds.has(_id)) { let n=2; while(seenIds.has(`${_id}_${n}`)) n++; _id=`${_id}_${n}`; }
-        seenIds.add(_id); return _id;
-      })(),
-      date: dateStr, startTime: minsToTime(startMins),
-      finishTime: finishMins ? minsToTime(finishMins) : '',
-      extFinishTime: extMins ? minsToTime(extMins) : '',
-      session: C.session>=0 ? r[C.session] : '', room: C.room>=0 ? r[C.room] : '',
-      syllabus, component: C.component>=0 ? r[C.component] : '',
-      entries: C.entries>=0 ? r[C.entries] : '',
-      invigRaw: C.invig>=0 ? r[C.invig] : '', backupRaw: C.backup>=0 ? r[C.backup] : ''
+      id, date: dateStr,
+      startTime:    minsToTime(startMins),
+      finishTime:   finishMins ? minsToTime(finishMins) : '',
+      extFinishTime:extMins    ? minsToTime(extMins)    : '',
+      session:   C.session>=0 ? r[C.session] : '',
+      room:      C.room>=0    ? r[C.room]    : '',
+      syllabus,
+      component: C.component>=0 ? r[C.component] : '',
+      entries:   C.entries>=0   ? r[C.entries]   : '',
+      invigRaw:  C.invig>=0     ? r[C.invig]     : '',
+      backupRaw: C.backup>=0    ? r[C.backup]     : '',
     });
   }
   return list;
 }
 
-/* ── NETWORKING ──────────────────────────────────────────────── */
-function downloadCSV(url) {
-  return new Promise((res, rej) => {
-    const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
-    https.get(proxyUrl, response => {
-      let data = '';
-      response.on('data', chunk => data += chunk);
-      response.on('end', () => {
-        if (data.includes(',') && data.split('\n').length > 2) return res(data);
-        // Fallback directly to direct stream if proxy outputs junk
-        https.get(url, r2 => {
-          let d2 = ''; r2.on('data', c => d2 += c);
-          r2.on('end', () => res(d2));
-        }).on('error', rej);
-      });
-    }).on('error', rej);
-  });
-}
-
+/* ── EMAILJS ─────────────────────────────────────────────────── */
 function sendEmailJS(params) {
   return new Promise((res, rej) => {
     const payload = JSON.stringify({
@@ -248,11 +355,12 @@ function sendEmailJS(params) {
   });
 }
 
-/* ── RUNTIME EXECUTION ───────────────────────────────────────── */
+/* ── MAIN ────────────────────────────────────────────────────── */
 async function run() {
   console.log(`🚀 Starting Autonomous Scheduler Process…`);
-  if (!CFG.sheetsUrl || !CFG.ejsPublicKey || !CFG.ejsServiceId || !CFG.ejsTemplateId) {
-    console.error("❌ Missing required operational target parameters. Process aborted.");
+
+  if (!CFG.ejsPublicKey || !CFG.ejsServiceId || !CFG.ejsTemplateId) {
+    console.error("❌ Missing EmailJS configuration. Process aborted.");
     process.exit(1);
   }
 
@@ -260,31 +368,56 @@ async function run() {
   try { if (fs.existsSync(SENT_LOG)) sentLog = JSON.parse(fs.readFileSync(SENT_LOG, 'utf8')); } catch(e) {}
 
   const tomorrowStr = getWarsawTomorrowISO();
-  console.log(`📅 Targeting exams listed for tomorrow: ${tomorrowStr}`);
+  console.log(`📅 Targeting exams for tomorrow: ${tomorrowStr}`);
 
-  const csv = await downloadCSV(CFG.sheetsUrl);
-  const exams = parseCSV(csv);
-  const tomorrowExams = exams.filter(e => e.date === tomorrowStr);
+  // ── Step 1: Try Firestore ─────────────────────────────────────
+  let allExams = await getExamsFromFirestore();
+  let source = 'Firestore';
 
-  console.log(`🔍 Total database rows mapped matching target date criteria: ${tomorrowExams.length}`);
+  // ── Step 2: Fall back to Google Sheets if needed ──────────────
+  if (!allExams) {
+    if (!CFG.sheetsUrl) {
+      console.error("❌ No Firestore data and no SHEETS_URL configured. Cannot proceed.");
+      process.exit(1);
+    }
+    console.log(`  📊 Falling back to Google Sheets CSV…`);
+    try {
+      const csv = await downloadCSV(CFG.sheetsUrl);
+      allExams = parseCSV(csv);
+      source = 'Google Sheets';
+      console.log(`  ✓ Loaded ${allExams.length} exams from Google Sheets`);
+    } catch(e) {
+      console.error(`  ❌ Google Sheets fallback also failed: ${e.message}`);
+      process.exit(1);
+    }
+  }
+
+  const tomorrowExams = allExams.filter(e => e.date === tomorrowStr);
+  console.log(`🔍 Source: ${source} | Total exams: ${allExams.length} | Tomorrow: ${tomorrowExams.length}`);
+
+  if (tomorrowExams.length === 0) {
+    console.log(`✅ No exams scheduled for ${tomorrowStr}. Nothing to send.`);
+    fs.mkdirSync(path.dirname(SENT_LOG), { recursive: true });
+    fs.writeFileSync(SENT_LOG, JSON.stringify(sentLog, null, 2), 'utf8');
+    return;
+  }
 
   let actionsDispatched = 0;
   for (const exam of tomorrowExams) {
     for (const [rawName, role, typeKey] of [
-      [exam.invigRaw, 'Main Invigilator', 'main'],
-      [exam.backupRaw, 'Backup Invigilator', 'backup']
+      [exam.invigRaw,  'Main Invigilator',   'main'],
+      [exam.backupRaw, 'Backup Invigilator',  'backup'],
     ]) {
       const person = resolveInvigilator(rawName);
       if (!person) continue;
 
       const logKey = `${exam.id}_${typeKey}`;
-      // Skip if already managed by manual override interface or prior processing loop
       if (sentLog[logKey]) {
         console.log(`  ⏭ Skipping ${person.email} (${role}) — already notified.`);
         continue;
       }
 
-      console.log(`  📧 Dispatching alert payload to ${person.email} for ${exam.syllabus}…`);
+      console.log(`  📧 Sending to ${person.email} for ${exam.syllabus}…`);
       const payload = {
         to_name:        person.name.split(' ')[0],
         to_email:       person.email,
@@ -297,33 +430,32 @@ async function run() {
         ext_finish:     exam.extFinishTime || 'N/A',
         num_entries:    exam.entries || 'N/A',
         role,
-        readiness_time: addMins(exam.startTime, -20)
+        readiness_time: addMins(exam.startTime, -20),
       };
 
       try {
         await sendEmailJS(payload);
-        // Write status mapping identifier configuration as explicitly "auto"
-        sentLog[logKey] = "auto";
+        sentLog[logKey] = 'auto';
         actionsDispatched++;
-        console.log(`    ✓ Dispatched successfully.`);
+        console.log(`    ✓ Sent successfully.`);
       } catch(err) {
-        console.error(`    ✗ Transmission failure: ${err.message}`);
+        console.error(`    ✗ Failed: ${err.message}`);
       }
       await new Promise(r => setTimeout(r, 600));
     }
   }
 
-  // Retention cleanup optimization maintenance loop
+  // Cleanup old log entries
   const ninetyDaysAgo = new Date(); ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
   for (const k in sentLog) {
-    if (sentLog[k] !== "auto" && sentLog[k] !== "manual" && new Date(sentLog[k]) < ninetyDaysAgo) {
+    if (sentLog[k] !== 'auto' && sentLog[k] !== 'manual' && new Date(sentLog[k]) < ninetyDaysAgo) {
       delete sentLog[k];
     }
   }
 
   fs.mkdirSync(path.dirname(SENT_LOG), { recursive: true });
   fs.writeFileSync(SENT_LOG, JSON.stringify(sentLog, null, 2), 'utf8');
-  console.log(`🏁 Operation finalized. Total alerts delivered: ${actionsDispatched}`);
+  console.log(`🏁 Done. Alerts delivered: ${actionsDispatched}`);
 }
 
-run().catch(console.error);
+run().catch(e => { console.error('Fatal:', e); process.exit(1); });

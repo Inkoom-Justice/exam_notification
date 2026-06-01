@@ -246,7 +246,6 @@ async function initApp() {
   updateStats();
   setInterval(() => { renderDashboard(); renderTimetable(); updateStats(); }, 60000);
 
-  startDailyNotificationScheduler();
 
   // ── Show cloud status in UI ───────────────────────────────────
   if (window.FB?.SimpleDB) {
@@ -1061,25 +1060,10 @@ async function runTomorrowNotificationCheck() {
 }
 
 /* auto-daily-helper by Justice */
-function startDailyNotificationScheduler() {
-
-  setInterval(() => {
-
-    const now = new Date();
-
-    const time = now.toLocaleTimeString('en-GB', {
-      timeZone: 'Europe/Warsaw',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-
-    if (time === '19:00') {
-      runTomorrowNotificationCheck();
-    }
-
-  }, 60000);
-
-}
+// Browser-side auto-scheduler removed.
+// Automatic 7pm notifications are handled exclusively by GitHub Actions (notify.js)
+// to prevent duplicate sends when the app is open on multiple devices simultaneously.
+// Use the manual 📧 buttons or Settings → Run Check Now for on-demand sends.
 
 
 
@@ -1668,7 +1652,7 @@ function _renderSummaryForDate(dateStr) {
   const allDates   = _summaryUniqueDates();
   const dateExams  = exams.filter(e => e.date === dateStr).sort((a,b) => a.startTime.localeCompare(b.startTime));
   const curIdx     = allDates.indexOf(dateStr);
-  const prevDate   = allDates.slice(0, curIdx).reverse().find(d => d <= today) || allDates[curIdx - 1] || null;
+  const prevDate   = curIdx > 0 ? allDates[curIdx - 1] : null;
   const nextDate   = allDates.find(d => d > dateStr) || null;
 
   const dateLabel = new Date(dateStr + 'T12:00:00Z').toLocaleDateString('en-GB', {
