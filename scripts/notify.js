@@ -19,6 +19,7 @@ const CFG = {
   ejsPublicKey:  process.env.EJS_PUBLIC_KEY   || '',
   ejsServiceId:  process.env.EJS_SERVICE_ID   || '',
   ejsTemplateId: process.env.EJS_TEMPLATE_ID  || '',
+  ejsPrivateKey: process.env.EMAILJS_PRIVATE_KEY || '',
   emailDomain:   process.env.EMAIL_DOMAIN     || 'regent.edu.pl',
   firebaseSA:    process.env.FIREBASE_SERVICE_ACCOUNT || '',
   projectId:     process.env.FIREBASE_PROJECT_ID || 'regent-exam-notifier',
@@ -341,7 +342,8 @@ function sendEmailJS(params) {
   return new Promise((res, rej) => {
     const payload = JSON.stringify({
       user_id: CFG.ejsPublicKey, service_id: CFG.ejsServiceId,
-      template_id: CFG.ejsTemplateId, template_params: params
+      template_id: CFG.ejsTemplateId, template_params: params,
+      accessToken: CFG.ejsPrivateKey
     });
     const req = https.request({
       hostname: 'api.emailjs.com', path: '/api/v1.0/email/send', method: 'POST',
