@@ -39,6 +39,7 @@ jobs:
           EJS_PUBLIC_KEY: ${{ secrets.EJS_PUBLIC_KEY }}
           EJS_SERVICE_ID: ${{ secrets.EJS_SERVICE_ID }}
           EJS_TEMPLATE_ID: ${{ secrets.EJS_TEMPLATE_ID }}
+          EMAILJS_PRIVATE_KEY: ${{ secrets.EMAILJS_PRIVATE_KEY }}
           EMAIL_DOMAIN: "regent.edu.pl"
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_PROJECT_ID: "regent-exam-notifier"
