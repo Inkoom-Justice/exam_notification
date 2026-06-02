@@ -40,7 +40,7 @@ const INVIGILATORS = [
   { name:'Kristy Khemraj',      aliases:['Kristy','Kristy Khemraj','Kristy//','Khemraj']       },
   { name:'Justice Inkoom',      aliases:['Justice','Justice//','Justice Inkoom']                },
   { name:'Zipporah Bvalani',    aliases:['Zipporah','Zipporah//','Zipporah Bvalani']            },
-  { name:'Szymon',              aliases:['Szymon','Szymon//']                                   },
+  { name:'Szymon Paczkowski',   aliases:['Szymon','Szymon//','Szymon Paczkowski','Paczkowski']  },
 ];
 
 /* ── WARSAW TIME ─────────────────────────────────────────────── */
@@ -95,7 +95,7 @@ function resolveInvigilator(rawName) {
   const cleaned = rawName.toString().replace(/\/+$/, '').trim();
   if (!cleaned || cleaned === '-' || cleaned.toLowerCase() === 'nan') return null;
   const found = INVIGILATORS.find(inv => inv.aliases.some(a => a.trim().toLowerCase() === cleaned.toLowerCase()));
-  if (found) return { name: found.name, email: `${found.name.toLowerCase().replace(/[^a-z]/g,'')}@${CFG.emailDomain}` };
+  if (found) return { name: found.name, email: `${found.name.toLowerCase().replace(/\s+/g,'.').replace(/[^a-z.]/g,'')}@${CFG.emailDomain}` };
   const fallbackEmail = `${cleaned.toLowerCase().replace(/\s+/g,'.').replace(/[^a-z.]/g,'')}@${CFG.emailDomain}`;
   return { name: cleaned, email: fallbackEmail };
 }
