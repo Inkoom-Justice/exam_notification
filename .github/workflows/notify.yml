@@ -1,0 +1,53 @@
+name: Autonomous Evening Exam Notifier
+
+on:
+  schedule:
+    # Runs exactly once a day at 17:00 UTC (which maps directly to 19:00 Warsaw Time)
+    - cron: '0 17 * * *'
+  workflow_dispatch: # Keeps manual execution diagnostic tests active via GitHub Actions UI
+
+permissions:
+  contents: write
+
+jobs:
+  notify-invigilators:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository codebase
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js environment runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Cache dependencies node_modules
+        uses: actions/cache@v4
+        with:
+          path: scripts/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('scripts/package.json') }}
+
+      - name: Install execution requirements
+        run: |
+          cd scripts
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Execute notification engine
+        run: node scripts/notify.js
+        env:
+          SHEETS_URL: ${{ secrets.SHEETS_URL }}
+          EJS_PUBLIC_KEY: ${{ secrets.EJS_PUBLIC_KEY }}
+          EJS_SERVICE_ID: ${{ secrets.EJS_SERVICE_ID }}
+          EJS_TEMPLATE_ID: ${{ secrets.EJS_TEMPLATE_ID }}
+          EMAILJS_PRIVATE_KEY: ${{ secrets.EMAILJS_PRIVATE_KEY }}
+          EMAIL_DOMAIN: "regent.edu.pl"
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_PROJECT_ID: "regent-exam-notifier"
+
+      - name: Commit sent tracking payload logs back to repository
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/sent-log.json
+          git commit -m "chore: update sent notification tracker history [skip ci]" || exit 0
+          git push origin main
