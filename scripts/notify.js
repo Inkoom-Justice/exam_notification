@@ -401,7 +401,19 @@ function sendEmailJS(params) {
 }
 
 /* ── MAIN ────────────────────────────────────────────────────── */
+function isWarsawAfter1830() {
+  const now = new Date();
+  const warsawStr = now.toLocaleString('en-US', { timeZone: 'Europe/Warsaw', hour: 'numeric', minute: 'numeric', hour12: false });
+  const [h, m] = warsawStr.split(':').map(Number);
+  return (h > 18) || (h === 18 && m >= 30);
+}
+
 async function run() {
+  const isDryRun = process.argv.includes('--dry-run') || !isWarsawAfter1830();
+  if (isDryRun) {
+    console.log(`🧪 DRY RUN MODE — emails will NOT be sent (current Warsaw time is before 18:30)`);
+    if (process.argv.includes('--dry-run')) console.log(`   (--dry-run flag detected)`);
+  }
   console.log(`🚀 Starting Autonomous Scheduler Process…`);
 
   if (!CFG.ejsPublicKey || !CFG.ejsServiceId || !CFG.ejsTemplateId) {
@@ -517,11 +529,16 @@ async function run() {
 
       let success = false;
       try {
-        await sendEmailJS(payload);
-        sentLog[logKey] = new Date().toISOString();
-        actionsDispatched++;
-        success = true;
-        console.log(`    ✓ Sent successfully.`);
+        if (isDryRun) {
+          console.log(`    🧪 [DRY RUN] Would send to ${person.email} — skipping.`);
+          success = true;
+        } else {
+          await sendEmailJS(payload);
+          sentLog[logKey] = new Date().toISOString();
+          actionsDispatched++;
+          success = true;
+          console.log(`    ✓ Sent successfully.`);
+        }
       } catch(err) {
         console.error(`    ✗ Failed: ${err.message}`);
       }
@@ -545,10 +562,14 @@ async function run() {
     }
   }
 
-  // ── Save sent-log and notifLog to both Firestore and local file ─
-  await saveSentLog(sentLog, fsToken, fsProjectId);
-  await saveNotifLog(notifLog, fsToken, fsProjectId);
-  console.log(`🏁 Done. Alerts delivered: ${actionsDispatched}`);
+  // ── Save sent-log and notifLog (skip during dry run) ────────────
+  if (!isDryRun) {
+    await saveSentLog(sentLog, fsToken, fsProjectId);
+    await saveNotifLog(notifLog, fsToken, fsProjectId);
+  } else {
+    console.log(`🧪 [DRY RUN] Sent-log and notifLog NOT updated.`);
+  }
+  console.log(`🏁 Done. ${isDryRun ? 'Dry run complete' : `Alerts delivered: ${actionsDispatched}`}`);
 }
 
 async function saveSentLog(sentLog, token, projectId) {
