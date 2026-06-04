@@ -1,9 +1,9 @@
 name: Autonomous Evening Exam Notifier
 
 on:
-  schedule:
+  #schedule:
     # Runs exactly once a day at 17:00 UTC (which maps directly to 19:00 Warsaw Time)
-    - cron: '0 17 * * *'
+    # - cron: '0 17 * * *'
   workflow_dispatch: # Keeps manual execution diagnostic tests active via GitHub Actions UI
 
 permissions:
