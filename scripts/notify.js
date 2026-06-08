@@ -27,15 +27,15 @@ const CFG = {
 
 const SENT_LOG = path.join(__dirname, '..', 'data', 'sent-log.json');
 
-/* ── INVIGILATORS ────────────────────────────────────────────── */
-const INVIGILATORS = [
+/* ── INVIGILATORS (fallback — overwritten by Firestore at runtime) ── */
+let INVIGILATORS = [
   { name:'Anna Martowicz',      aliases:['AM','Anna M','Anna Martowicz']                        },
   { name:'Mariusz Krajewski',   aliases:['Mariusz','Krajewski','Mariusz Krajewski']             },
   { name:'Anna Santos',         aliases:['Anna Santos','Santos']                                },
   { name:'Marta Szweda',        aliases:['Marta','Marta Szweda','Szweda']                       },
   { name:'Krzysztof Martowicz', aliases:['KM','Krzysztof','Krzysztof Martowicz','Martowicz']    },
   { name:'Maciej Pyrka',        aliases:['Maciek','Maciek/','Maciek//','Maciej','Maciej Pyrka'] },
-  { name:'Anna Panfil',         aliases:['Panfil','Anna Panfil']                                },
+  { name:'Anna Panfil',         aliases:['Panfil','Anna Panfil','Ania P','Ania Panfil','AP']    },
   { name:'Roger Messer',        aliases:['Roger','Roger Messer','Messer']                       },
   { name:'Kristy Khemraj',      aliases:['Kristy','Kristy Khemraj','Kristy//','Khemraj']       },
   { name:'Justice Inkoom',      aliases:['Justice','Justice//','Justice Inkoom']                },
@@ -94,7 +94,13 @@ function resolveSingle(token) {
   const t = token.replace(/\/+$/,'').trim();
   if (!t || t === '-' || t.toLowerCase() === 'nan') return null;
   const found = INVIGILATORS.find(inv => inv.aliases.some(a => a.trim().toLowerCase() === t.toLowerCase()));
-  if (found) return { name: found.name, email: `${found.name.toLowerCase().replace(/\s+/g,'.').replace(/[^a-z.]/g,'')}@${CFG.emailDomain}` };
+  if (found) {
+    // Use stored email if set, otherwise derive from name
+    const email = found.email && found.email.includes('@')
+      ? found.email
+      : `${found.name.toLowerCase().replace(/\s+/g,'.').replace(/[^a-z.]/g,'')}@${CFG.emailDomain}`;
+    return { name: found.name, email };
+  }
   // fallback: only use if it looks like a real name (at least 2 chars, not a connector word)
   const skip = ['i','and','&','oraz','technical','tech','backup','main'];
   if (t.length < 2 || skip.includes(t.toLowerCase())) return null;
@@ -289,6 +295,29 @@ async function firestorePatch(token, projectId, docPath, fields) {
   });
 }
 
+/* ── LOAD INVIGILATORS FROM FIRESTORE ───────────────────────── */
+async function loadInvigilatorsFromFirestore(token, projectId) {
+  try {
+    const doc = await firestoreGet(token, projectId, 'appdata/invigilators');
+    if (!doc || doc.error || !doc.fields?.value) return false;
+    const parsed = JSON.parse(doc.fields.value.stringValue || '[]');
+    if (!Array.isArray(parsed) || parsed.length === 0) return false;
+    // Only use active invigilators
+    INVIGILATORS = parsed
+      .filter(inv => inv.active !== false)
+      .map(inv => ({
+        name:    inv.name,
+        aliases: Array.isArray(inv.aliases) ? inv.aliases : [inv.name],
+        email:   inv.email || ''
+      }));
+    console.log(`  ☁ Loaded ${INVIGILATORS.length} invigilators from Firestore`);
+    return true;
+  } catch(e) {
+    console.warn('  ⚠ Could not load invigilators from Firestore:', e.message);
+    return false;
+  }
+}
+
 /* ── GOOGLE SHEETS FALLBACK ──────────────────────────────────── */
 function downloadCSV(url) {
   return new Promise((res, rej) => {
@@ -466,6 +495,12 @@ async function run() {
       fsToken = await getAccessToken(sa);
       fsProjectId = sa.project_id || CFG.projectId;
     } catch(e) { console.warn('  ⚠ Could not get Firestore token:', e.message); }
+  }
+
+  // ── Load invigilators from Firestore (overrides hardcoded list) ─
+  if (fsToken) {
+    const loaded = await loadInvigilatorsFromFirestore(fsToken, fsProjectId);
+    if (!loaded) console.log('  ℹ Using hardcoded invigilator list as fallback');
   }
 
   // ── Load sent-log: Firestore first, then local file ───────────
