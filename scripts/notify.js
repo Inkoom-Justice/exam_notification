@@ -300,9 +300,30 @@ async function loadInvigilatorsFromFirestore(token, projectId) {
   try {
     const doc = await firestoreGet(token, projectId, 'appdata/invigilators');
     if (!doc || doc.error || !doc.fields?.value) return false;
-    const parsed = JSON.parse(doc.fields.value.stringValue || '[]');
+
+    const val = doc.fields.value;
+    let parsed = [];
+
+    if (val.stringValue) {
+      // Stored as JSON string
+      parsed = JSON.parse(val.stringValue);
+    } else if (val.arrayValue) {
+      // Stored as native Firestore array (how Firebase JS SDK saves it)
+      parsed = (val.arrayValue.values || []).map(v => {
+        const f = v.mapValue?.fields || {};
+        const str  = k => f[k]?.stringValue || '';
+        const bool = k => f[k]?.booleanValue !== false;
+        const arr  = k => (f[k]?.arrayValue?.values || []).map(a => a.stringValue || '');
+        return {
+          name:    str('name'),
+          email:   str('email'),
+          aliases: arr('aliases'),
+          active:  bool('active'),
+        };
+      });
+    }
+
     if (!Array.isArray(parsed) || parsed.length === 0) return false;
-    // Only use active invigilators
     INVIGILATORS = parsed
       .filter(inv => inv.active !== false)
       .map(inv => ({
