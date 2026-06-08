@@ -90,54 +90,62 @@ function fmtDate(d) {
 }
 
 /* ── INVIGILATOR RESOLUTION ──────────────────────────────────── */
-function resolveSingle(token) {
-  const t = token.replace(/\/+$/,'').trim();
-  if (!t || t === '-' || t.toLowerCase() === 'nan') return null;
-  const found = INVIGILATORS.find(inv => inv.aliases.some(a => a.trim().toLowerCase() === t.toLowerCase()));
-  if (found) {
-    // Use stored email if set, otherwise derive from name
-    const email = found.email && found.email.includes('@')
-      ? found.email
-      : `${found.name.toLowerCase().replace(/\s+/g,'.').replace(/[^a-z.]/g,'')}@${CFG.emailDomain}`;
-    return { name: found.name, email };
-  }
-  // fallback: only use if it looks like a real name (at least 2 chars, not a connector word)
-  const skip = ['i','and','&','oraz','technical','tech','backup','main'];
-  if (t.length < 2 || skip.includes(t.toLowerCase())) return null;
-  const fallbackEmail = `${t.toLowerCase().replace(/\s+/g,'.').replace(/[^a-z.]/g,'')}@${CFG.emailDomain}`;
-  return { name: t, email: fallbackEmail };
+// Noise words to ignore when scanning raw name fields
+const SKIP_WORDS = new Set(['i','and','&','oraz','technical','tech','backup','main','supervision','w','in','at','room']);
+
+function makeEmail(inv) {
+  return inv.email && inv.email.includes('@')
+    ? inv.email
+    : `${inv.name.toLowerCase().replace(/\s+/g,'.').replace(/[^a-z.]/g,'')}@${CFG.emailDomain}`;
+}
+
+function matchAlias(token) {
+  // Strip trailing punctuation and slashes, lowercase
+  const t = token.replace(/[\/.,;]+$/g,'').replace(/^\/+/,'').trim();
+  if (!t || t.length < 2) return null;
+  const tl = t.toLowerCase();
+  if (SKIP_WORDS.has(tl)) return null;
+  const found = INVIGILATORS.find(inv => inv.aliases.some(a => a.trim().toLowerCase() === tl));
+  return found ? { name: found.name, email: makeEmail(found) } : null;
 }
 
 // Splits a raw field that may contain multiple invigilators
-// e.g. "AM i Marta Szweda technical" → [Anna Martowicz, Marta Szweda]
+// Strategy: tokenize into words, try greedy longest-alias match using sliding window
 function resolveInvigilators(rawName) {
   if (!rawName) return [];
-  const raw = rawName.toString().replace(/\/+$/, '').trim();
+  const raw = rawName.toString().replace(/[\/]+$/, '').trim();
   if (!raw || raw === '-' || raw.toLowerCase() === 'nan') return [];
 
   // First try the whole string as one alias
-  const whole = resolveSingle(raw);
+  const whole = matchAlias(raw);
   if (whole) return [whole];
 
-  // Split on common separators: " i ", " and ", " & ", " oraz ", comma, slash
-  const parts = raw.split(/\s+i\s+|\s+and\s+|\s+&\s+|\s+oraz\s+|[,/]+/i).map(p => p.trim()).filter(Boolean);
+  // Tokenize: split on separators AND spaces, keeping multi-word groups intact per separator chunk
+  const chunks = raw.split(/\s+i\s+|\s+and\s+|\s+&\s+|\s+oraz\s+|[,/]+/i).map(p => p.trim()).filter(Boolean);
 
-  // Try each part as an alias — greedy: also try combining adjacent parts
   const results = [];
   const seen = new Set();
-  let i = 0;
-  while (i < parts.length) {
-    // Try two-word combo first (e.g. "Anna" + "Martowicz" or "AM" alone)
-    let matched = false;
-    if (i + 1 < parts.length) {
-      const combo = `${parts[i]} ${parts[i+1]}`;
-      const r = resolveSingle(combo);
-      if (r && !seen.has(r.email)) { results.push(r); seen.add(r.email); i += 2; matched = true; }
-    }
-    if (!matched) {
-      const r = resolveSingle(parts[i]);
-      if (r && !seen.has(r.email)) { results.push(r); seen.add(r.email); }
-      i++;
+
+  for (const chunk of chunks) {
+    // Try chunk as a whole first
+    let r = matchAlias(chunk);
+    if (r && !seen.has(r.email)) { results.push(r); seen.add(r.email); continue; }
+
+    // Slide a window of 1-3 words through the chunk
+    const words = chunk.split(/\s+/);
+    let wi = 0;
+    while (wi < words.length) {
+      let matched = false;
+      // Try 3-word, 2-word, then 1-word windows
+      for (let len = Math.min(3, words.length - wi); len >= 1; len--) {
+        const candidate = words.slice(wi, wi + len).join(' ');
+        r = matchAlias(candidate);
+        if (r && !seen.has(r.email)) {
+          results.push(r); seen.add(r.email);
+          wi += len; matched = true; break;
+        }
+      }
+      if (!matched) wi++; // skip unmatched word (noise)
     }
   }
   return results;
