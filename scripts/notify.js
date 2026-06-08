@@ -90,14 +90,51 @@ function fmtDate(d) {
 }
 
 /* ── INVIGILATOR RESOLUTION ──────────────────────────────────── */
-function resolveInvigilator(rawName) {
-  if (!rawName) return null;
-  const cleaned = rawName.toString().replace(/\/+$/, '').trim();
-  if (!cleaned || cleaned === '-' || cleaned.toLowerCase() === 'nan') return null;
-  const found = INVIGILATORS.find(inv => inv.aliases.some(a => a.trim().toLowerCase() === cleaned.toLowerCase()));
+function resolveSingle(token) {
+  const t = token.replace(/\/+$/,'').trim();
+  if (!t || t === '-' || t.toLowerCase() === 'nan') return null;
+  const found = INVIGILATORS.find(inv => inv.aliases.some(a => a.trim().toLowerCase() === t.toLowerCase()));
   if (found) return { name: found.name, email: `${found.name.toLowerCase().replace(/\s+/g,'.').replace(/[^a-z.]/g,'')}@${CFG.emailDomain}` };
-  const fallbackEmail = `${cleaned.toLowerCase().replace(/\s+/g,'.').replace(/[^a-z.]/g,'')}@${CFG.emailDomain}`;
-  return { name: cleaned, email: fallbackEmail };
+  // fallback: only use if it looks like a real name (at least 2 chars, not a connector word)
+  const skip = ['i','and','&','oraz','technical','tech','backup','main'];
+  if (t.length < 2 || skip.includes(t.toLowerCase())) return null;
+  const fallbackEmail = `${t.toLowerCase().replace(/\s+/g,'.').replace(/[^a-z.]/g,'')}@${CFG.emailDomain}`;
+  return { name: t, email: fallbackEmail };
+}
+
+// Splits a raw field that may contain multiple invigilators
+// e.g. "AM i Marta Szweda technical" → [Anna Martowicz, Marta Szweda]
+function resolveInvigilators(rawName) {
+  if (!rawName) return [];
+  const raw = rawName.toString().replace(/\/+$/, '').trim();
+  if (!raw || raw === '-' || raw.toLowerCase() === 'nan') return [];
+
+  // First try the whole string as one alias
+  const whole = resolveSingle(raw);
+  if (whole) return [whole];
+
+  // Split on common separators: " i ", " and ", " & ", " oraz ", comma, slash
+  const parts = raw.split(/\s+i\s+|\s+and\s+|\s+&\s+|\s+oraz\s+|[,/]+/i).map(p => p.trim()).filter(Boolean);
+
+  // Try each part as an alias — greedy: also try combining adjacent parts
+  const results = [];
+  const seen = new Set();
+  let i = 0;
+  while (i < parts.length) {
+    // Try two-word combo first (e.g. "Anna" + "Martowicz" or "AM" alone)
+    let matched = false;
+    if (i + 1 < parts.length) {
+      const combo = `${parts[i]} ${parts[i+1]}`;
+      const r = resolveSingle(combo);
+      if (r && !seen.has(r.email)) { results.push(r); seen.add(r.email); i += 2; matched = true; }
+    }
+    if (!matched) {
+      const r = resolveSingle(parts[i]);
+      if (r && !seen.has(r.email)) { results.push(r); seen.add(r.email); }
+      i++;
+    }
+  }
+  return results;
 }
 
 /* ── FIRESTORE REST API ───────────────────────────────────────── */
@@ -502,63 +539,66 @@ async function run() {
       [exam.invigRaw,  'Main Invigilator',   'main'],
       [exam.backupRaw, 'Backup Invigilator',  'backup'],
     ]) {
-      const person = resolveInvigilator(rawName);
-      if (!person) continue;
+      const persons = resolveInvigilators(rawName);
+      if (!persons.length) continue;
 
-      const logKey = `${exam.id}_${typeKey}`;
-      if (sentLog[logKey]) {
-        console.log(`  ⏭ Skipping ${person.email} (${role}) — already notified.`);
-        continue;
-      }
-
-      console.log(`  📧 Sending to ${person.email} for ${exam.syllabus}…`);
-      const payload = {
-        to_name:        person.name.split(' ')[0],
-        to_email:       person.email,
-        exam_subject:   exam.syllabus,
-        exam_component: exam.component || '',
-        exam_date:      fmtDate(exam.date),
-        exam_time:      exam.startTime,
-        exam_room:      exam.room || 'TBC',
-        finish_time:    exam.finishTime || 'TBC',
-        ext_finish:     exam.extFinishTime || 'N/A',
-        num_entries:    exam.entries || 'N/A',
-        role,
-        readiness_time: addMins(exam.startTime, -20),
-      };
-
-      let success = false;
-      try {
-        if (isDryRun) {
-          console.log(`    🧪 [DRY RUN] Would send to ${person.email} — skipping.`);
-          success = true;
-        } else {
-          await sendEmailJS(payload);
-          sentLog[logKey] = new Date().toISOString();
-          actionsDispatched++;
-          success = true;
-          console.log(`    ✓ Sent successfully.`);
+      for (let pi = 0; pi < persons.length; pi++) {
+        const person = persons[pi];
+        const logKey = `${exam.id}_${typeKey}${pi > 0 ? '_'+pi : ''}`;
+        if (sentLog[logKey]) {
+          console.log(`  ⏭ Skipping ${person.email} (${role}) — already notified.`);
+          continue;
         }
-      } catch(err) {
-        console.error(`    ✗ Failed: ${err.message}`);
-      }
 
-      // Write to notifLog so the app dashboard shows it
-      notifLog.unshift({
-        ts:        new Date().toISOString(),
-        examDate:  exam.date,
-        examTime:  exam.startTime,
-        subject:   exam.syllabus,
-        name:      person.name,
-        role,
-        email:     person.email,
-        success,
-        error:     success ? null : 'Send failed',
-        source:    'auto'
-      });
-      if (notifLog.length > 500) notifLog = notifLog.slice(0, 500);
+        console.log(`  📧 Sending to ${person.email} for ${exam.syllabus}…`);
+        const payload = {
+          to_name:        person.name.split(' ')[0],
+          to_email:       person.email,
+          exam_subject:   exam.syllabus,
+          exam_component: exam.component || '',
+          exam_date:      fmtDate(exam.date),
+          exam_time:      exam.startTime,
+          exam_room:      exam.room || 'TBC',
+          finish_time:    exam.finishTime || 'TBC',
+          ext_finish:     exam.extFinishTime || 'N/A',
+          num_entries:    exam.entries || 'N/A',
+          role,
+          readiness_time: addMins(exam.startTime, -20),
+        };
 
-      await new Promise(r => setTimeout(r, 600));
+        let success = false;
+        try {
+          if (isDryRun) {
+            console.log(`    🧪 [DRY RUN] Would send to ${person.email} — skipping.`);
+            success = true;
+          } else {
+            await sendEmailJS(payload);
+            sentLog[logKey] = new Date().toISOString();
+            actionsDispatched++;
+            success = true;
+            console.log(`    ✓ Sent successfully.`);
+          }
+        } catch(err) {
+          console.error(`    ✗ Failed: ${err.message}`);
+        }
+
+        // Write to notifLog so the app dashboard shows it
+        notifLog.unshift({
+          ts:        new Date().toISOString(),
+          examDate:  exam.date,
+          examTime:  exam.startTime,
+          subject:   exam.syllabus,
+          name:      person.name,
+          role,
+          email:     person.email,
+          success,
+          error:     success ? null : 'Send failed',
+          source:    'auto'
+        });
+        if (notifLog.length > 500) notifLog = notifLog.slice(0, 500);
+
+        await new Promise(r => setTimeout(r, 600));
+      } // end persons loop
     }
   }
 
